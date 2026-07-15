@@ -58,18 +58,7 @@ export function ConsentBanner() {
   };
 
   if (!showBanner) {
-    return (
-      <div className="fixed bottom-4 left-4 z-50">
-        <button
-          onClick={handleReset}
-          className="flex items-center gap-2 px-3.5 py-2 text-sm font-mono bg-slate-900/95 hover:bg-slate-800 text-slate-350 hover:text-slate-100 border border-slate-800 rounded-none shadow-lg transition cursor-pointer"
-          title="Reset Cookie Settings"
-        >
-          <Shield className="w-4 h-4 text-brand-blue" />
-          <span>Cookies: {consentState || "Not set"}</span>
-        </button>
-      </div>
-    );
+    return null;
   }
 
   return (

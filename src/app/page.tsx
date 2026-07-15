@@ -343,9 +343,6 @@ export default function Home() {
             <div>
               <h1 className="text-base sm:text-lg font-bold text-slate-100 uppercase tracking-widest flex items-center gap-2">
                 <span>itsmysite</span>
-                <span className="text-xs bg-brand-blue text-slate-955 px-1.5 py-0.5 font-extrabold uppercase">
-                  EDGE V4
-                </span>
               </h1>
               <span className="text-xs text-slate-500 font-bold block">Geofencing, Staffing & Shift Validation</span>
             </div>
@@ -732,17 +729,22 @@ export default function Home() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           
           {/* Static Compliance Navigation */}
-          <div className="flex flex-wrap gap-4 text-slate-400 font-bold uppercase tracking-wider shrink-0">
-            <Link href="/terms" className="hover:text-brand-blue transition">/terms</Link>
-            <Link href="/privacy" className="hover:text-brand-blue transition">/privacy</Link>
-            <Link href="/cookies" className="hover:text-brand-blue transition">/cookies</Link>
-            <Link href="/accessibility" className="hover:text-brand-blue transition">/accessibility</Link>
+          <div className="flex flex-col gap-2 shrink-0">
+            <div className="flex flex-wrap gap-4 text-slate-400 font-bold uppercase tracking-wider">
+              <Link href="/terms" className="hover:text-brand-blue transition">/terms</Link>
+              <Link href="/privacy" className="hover:text-brand-blue transition">/privacy</Link>
+              <Link href="/cookies" className="hover:text-brand-blue transition">/cookies</Link>
+              <Link href="/accessibility" className="hover:text-brand-blue transition">/accessibility</Link>
+            </div>
+            <div className="text-slate-300 font-bold text-xs uppercase tracking-wider pt-2">
+              Powered by <a href="https://itsmyapp.co.uk" target="_blank" rel="noopener noreferrer" className="text-brand-blue hover:underline">itsmyapp.co.uk</a>
+            </div>
           </div>
           
           {/* Regulatory query lead */}
-          <div className="max-w-xl md:text-right leading-relaxed font-semibold">
+          <div className="max-w-xl md:text-right leading-relaxed font-semibold text-slate-450">
             Data Privacy & Compliance Queries: For any questions regarding your data rights, or to submit an inquiry, 
-            please contact our Data Privacy Lead directly at <a href="mailto:hello@itsmyapp.co.uk" className="text-slate-400 hover:text-brand-blue">hello@itsmyapp.co.uk</a>. 
+            please contact our Data Privacy Lead directly at <a href="mailto:hello@itsmyapp.co.uk" className="text-slate-100 hover:text-brand-blue font-extrabold underline">hello@itsmyapp.co.uk</a>. 
             We formally acknowledge all compliance submissions within 30 days.
           </div>
 
@@ -750,7 +752,6 @@ export default function Home() {
         
         <div className="max-w-7xl mx-auto mt-6 pt-4 border-t border-slate-900 text-center flex flex-col sm:flex-row justify-between text-[11px] text-slate-700">
           <span>&copy; {new Date().getFullYear()} itsmysite. All rights reserved. Registered UK GDPR Entity.</span>
-          <span className="uppercase font-bold tracking-wider">Zero-Server Client Edge Architecture</span>
         </div>
       </footer>
 

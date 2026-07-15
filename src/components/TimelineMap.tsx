@@ -558,6 +558,29 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
 
           {formMsg && <div className="text-xs text-brand-yellow font-bold animate-pulse">{formMsg}</div>}
 
+          {/* Helpful Lookup Links */}
+          <div className="bg-slate-950/80 border border-slate-850 p-3.5 space-y-2 font-mono text-[11px] leading-normal">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Helpful Location Tools</span>
+            <div className="flex gap-4">
+              <a 
+                href="https://what3words.com" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="text-brand-yellow hover:text-yellow-400 font-bold underline flex items-center gap-1 cursor-pointer"
+              >
+                <span>what3words Maps</span>
+              </a>
+              <a 
+                href="https://www.latlong.net" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="text-brand-blue hover:text-blue-400 font-bold underline flex items-center gap-1 cursor-pointer"
+              >
+                <span>Latitude/Longitude Finder</span>
+              </a>
+            </div>
+          </div>
+
           {/* Site List */}
           <div className="space-y-2 pt-3 border-t border-slate-800">
             <span className="text-xs text-slate-450 font-bold uppercase tracking-wider block">Active Geofenced Zones ({sites.length})</span>
