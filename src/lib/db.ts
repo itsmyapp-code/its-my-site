@@ -80,6 +80,16 @@ export interface Shift {
   validatedAt?: string;
 }
 
+function sanitizeFirestoreData<T extends object>(data: T): T {
+  const sanitized = { ...data } as any;
+  Object.keys(sanitized).forEach((key) => {
+    if (sanitized[key] === undefined) {
+      delete sanitized[key];
+    }
+  });
+  return sanitized;
+}
+
 // Default mock sites in Dartmouth, UK
 const DEFAULT_SITES: Site[] = [];
 
@@ -248,7 +258,7 @@ export async function dbAddSite(uid: string, site: Omit<Site, "id">): Promise<st
 
   if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
     try {
-      await setDoc(doc(dbInstance, "users", uid, "sites", id), site);
+      await setDoc(doc(dbInstance, "users", uid, "sites", id), sanitizeFirestoreData(site));
       return id;
     } catch (err) {
       console.error("Error adding site to Firestore, using local fallback:", err);
@@ -285,7 +295,7 @@ export async function dbUpdateSite(uid: string, siteId: string, data: Partial<Si
       const snapshot = await getDoc(docRef);
       if (snapshot.exists()) {
         const existing = snapshot.data();
-        await setDoc(docRef, { ...existing, ...data });
+        await setDoc(docRef, sanitizeFirestoreData({ ...existing, ...data }));
       }
       return;
     } catch (err) {
@@ -327,7 +337,7 @@ export async function dbAddEvent(uid: string, event: Omit<ShiftEvent, "id">): Pr
 
   if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
     try {
-      await setDoc(doc(dbInstance, "users", uid, "events", id), event);
+      await setDoc(doc(dbInstance, "users", uid, "events", id), sanitizeFirestoreData(event));
       return id;
     } catch (err) {
       console.error("Error adding event to Firestore, using local fallback:", err);
@@ -371,7 +381,7 @@ export async function dbSaveSettings(uid: string, settings: UserSettings): Promi
   if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
     try {
       const docRef = doc(dbInstance, "users", uid, "settings", "billing");
-      await setDoc(docRef, settings);
+      await setDoc(docRef, sanitizeFirestoreData(settings));
       return;
     } catch (err) {
       console.error("Error saving settings to Firestore, using local fallback:", err);
@@ -395,7 +405,7 @@ export async function dbAddAuditLog(uid: string, action: string, details: string
   if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
     try {
       const colRef = collection(dbInstance, "users", uid, "audit_logs");
-      await addDoc(colRef, logEntry);
+      await addDoc(colRef, sanitizeFirestoreData(logEntry));
     } catch (err) {
       console.error("Error writing audit log to Firestore:", err);
     }
@@ -468,7 +478,7 @@ export async function dbAddStaff(uid: string, staff: Omit<Staff, "id">): Promise
 
   if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
     try {
-      await setDoc(doc(dbInstance, "users", uid, "staff", id), staff);
+      await setDoc(doc(dbInstance, "users", uid, "staff", id), sanitizeFirestoreData(staff));
       if (staff.email) {
         await dbAddStaffMapping(staff.email, uid, id, staff.name);
       }
@@ -527,11 +537,11 @@ export async function dbAddStaffMapping(email: string, adminUid: string, staffId
 
   if (dbInstance && authInstance?.currentUser) {
     try {
-      await setDoc(doc(dbInstance, "staff_mappings", normalizedEmail), {
+      await setDoc(doc(dbInstance, "staff_mappings", normalizedEmail), sanitizeFirestoreData({
         adminUid,
         staffId,
         name,
-      });
+      }));
       return;
     } catch (err) {
       console.error("Error writing staff mapping to Firestore:", err);
@@ -617,7 +627,7 @@ export async function dbAddShift(uid: string, shift: Omit<Shift, "id">): Promise
 
   if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
     try {
-      await setDoc(doc(dbInstance, "users", uid, "shifts", id), shift);
+      await setDoc(doc(dbInstance, "users", uid, "shifts", id), sanitizeFirestoreData(shift));
       return id;
     } catch (err) {
       console.error("Error adding shift to Firestore, using local fallback:", err);
@@ -638,7 +648,7 @@ export async function dbUpdateShift(uid: string, shiftId: string, data: Partial<
       const snapshot = await getDoc(docRef);
       if (snapshot.exists()) {
         const existing = snapshot.data();
-        await setDoc(docRef, { ...existing, ...data });
+        await setDoc(docRef, sanitizeFirestoreData({ ...existing, ...data }));
       }
       return;
     } catch (err) {
