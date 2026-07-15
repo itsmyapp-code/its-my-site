@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Map, Plus, Trash2, MapPin, ListOrdered, Calendar, Bell, X, Check } from "lucide-react";
+import { Map, Plus, Trash2, MapPin, ListOrdered, Calendar, Bell, X, Check, Edit2 } from "lucide-react";
 import { 
   dbGetSites, 
   dbAddSite, 
@@ -103,6 +103,9 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
   const [instantTargetType, setInstantTargetType] = useState<"site" | "staff">("site");
   const [instantTargetIds, setInstantTargetIds] = useState<string[]>([]);
   const [dispatchMsg, setDispatchMsg] = useState("");
+
+  // Site editing state
+  const [editingSiteId, setEditingSiteId] = useState<string | null>(null);
   
   const [mapLoaded, setMapLoaded] = useState(false);
 
@@ -163,6 +166,48 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       loadData();
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleEditSiteClick = (site: Site) => {
+    setEditingSiteId(site.id);
+    setSiteName(site.name);
+    setSiteLat(site.lat.toString());
+    setSiteLng(site.lng.toString());
+    setSiteRadius(site.radius.toString());
+    setSiteType(site.type || "geofence");
+    setAssociatedSiteId(site.associatedSiteId || "");
+    setValidationTimes(site.validationTimes || []);
+    
+    if (site.what3words) {
+      setInputMethod("w3w");
+      setW3wInput(site.what3words);
+    } else if (site.postcode) {
+      setInputMethod("postcode");
+      setPostcodeInput(site.postcode);
+    } else {
+      setInputMethod("coords");
+    }
+    
+    setFormMsg(`Editing location: ${site.name}`);
+  };
+
+  const handleCancelEditSite = () => {
+    setEditingSiteId(null);
+    setSiteName("");
+    setSiteLat("");
+    setSiteLng("");
+    setSiteRadius("100");
+    setSiteType("geofence");
+    setW3wInput("");
+    setPostcodeInput("");
+    setAssociatedSiteId("");
+    setValidationTimes([]);
+    setFormMsg("");
+    
+    if (draftMarkerRef.current) {
+      draftMarkerRef.current.remove();
+      draftMarkerRef.current = null;
     }
   };
 
@@ -448,7 +493,31 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
 
     setFormMsg("Saving site...");
     try {
-      await dbAddSite(uid, siteData);
+      if (editingSiteId) {
+        const oldSite = sites.find(s => s.id === editingSiteId);
+        const transitDestinations = oldSite ? oldSite.transitDestinations : undefined;
+        
+        await dbUpdateSite(uid, editingSiteId, { ...siteData, transitDestinations });
+        setFormMsg("Site updated successfully!");
+        
+        await dbAddAuditLog(
+          uid, 
+          "GEOFENCE_SITE_UPDATED", 
+          `Admin updated geofence site: ${siteData.name} at (${siteData.lat.toFixed(5)}, ${siteData.lng.toFixed(5)}) with radius ${siteData.radius}m.`
+        );
+        
+        setEditingSiteId(null);
+      } else {
+        await dbAddSite(uid, siteData);
+        setFormMsg("Site registered successfully!");
+        
+        await dbAddAuditLog(
+          uid, 
+          "GEOFENCE_SITE_CREATED", 
+          `Admin created new geofence site: ${siteData.name} at (${siteData.lat.toFixed(5)}, ${siteData.lng.toFixed(5)}) with radius ${siteData.radius}m.`
+        );
+      }
+
       setSiteName("");
       setSiteLat("");
       setSiteLng("");
@@ -464,18 +533,10 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
         draftMarkerRef.current = null;
       }
 
-      setFormMsg("Site registered successfully!");
-      
-      await dbAddAuditLog(
-        uid, 
-        "GEOFENCE_SITE_CREATED", 
-        `Admin created new geofence site: ${siteData.name} at (${siteData.lat.toFixed(5)}, ${siteData.lng.toFixed(5)}) with radius ${siteData.radius}m.`
-      );
-
       loadData();
     } catch (err) {
       console.error(err);
-      setFormMsg("Error adding site.");
+      setFormMsg("Error saving site.");
     }
   };
 
@@ -709,12 +770,23 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
               )}
             </div>
 
-            <button
-              type="submit"
-              className="w-full h-9 bg-brand-blue hover:bg-blue-600 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
-            >
-              Add New Active Site
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="grow h-9 bg-brand-blue hover:bg-blue-600 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
+              >
+                {editingSiteId ? "Save Location Changes" : "Add New Active Site"}
+              </button>
+              {editingSiteId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditSite}
+                  className="h-9 px-4 bg-slate-955 hover:bg-slate-800 border border-slate-800 text-slate-350 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
           </form>
 
           {formMsg && <div className="text-xs text-brand-yellow font-bold animate-pulse">{formMsg}</div>}
@@ -774,13 +846,22 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
                           </span>
                         )}
                       </div>
-                      <button
-                        onClick={() => handleDeleteSite(site.id, site.name)}
-                        className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
-                        title="Delete site"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => handleEditSiteClick(site)}
+                          className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-blue rounded transition cursor-pointer"
+                          title="Edit site"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSite(site.id, site.name)}
+                          className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
+                          title="Delete site"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     {/* Site validation times manager */}
