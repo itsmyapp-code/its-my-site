@@ -695,18 +695,21 @@ export default function Home() {
                   </div>
                 ) : (
                   workerShifts.map((shift) => (
-                    <div key={shift.id} className="p-3 bg-slate-950 border border-slate-850 rounded-none flex justify-between items-center text-xs">
+                    <div key={shift.id} className="p-4 bg-slate-950 border border-slate-800 rounded-none flex justify-between items-center gap-3">
                       <div>
-                        <div className="font-bold text-slate-100">{shift.siteName}</div>
-                        <div className="text-slate-500 text-[10px] mt-0.5">
-                          Date: {shift.date} | Hours: {shift.hours} hrs | Start: {shift.startTime}
+                        <div className="font-extrabold text-slate-100 text-sm">{shift.siteName}</div>
+                        <div className="text-slate-400 text-xs font-semibold mt-1">
+                          Date: <span className="text-slate-200">{(() => {
+                            const p = shift.date.split("-");
+                            return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : shift.date;
+                          })()}</span> | Hours: <span className="text-slate-200">{shift.hours} hrs</span> | Start: <span className="text-slate-200">{shift.startTime}</span>
                         </div>
                       </div>
                       <div>
-                        <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-none uppercase tracking-wider leading-none ${
+                        <span className={`px-2.5 py-1 text-[10px] font-extrabold border rounded-none uppercase tracking-wider leading-none ${
                           shift.validated 
                             ? "bg-emerald-950 text-emerald-400 border-emerald-800" 
-                            : "bg-slate-900 text-rose-400 border-rose-955 animate-pulse"
+                            : "bg-slate-900 text-rose-450 border-rose-955 animate-pulse"
                         }`}>
                           {shift.validated ? "VALIDATED" : "CHECK-IN REQ"}
                         </span>

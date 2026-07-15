@@ -186,6 +186,36 @@ const MOCK_W3W_COORDINATES: Record<string, { lat: number; lng: number }> = {
   "///invested.remarried.mailer": { lat: 50.3545, lng: -3.5935 }
 };
 
+// Resolve what3words using live API if key is available, fallback to mock resolver
+export async function resolveWhat3Words(w3w: string): Promise<{ lat: number; lng: number }> {
+  let cleanW3W = w3w.trim().toLowerCase();
+  if (cleanW3W.startsWith("///")) {
+    cleanW3W = cleanW3W.slice(3);
+  }
+  
+  const storedKey = typeof window !== "undefined" ? localStorage.getItem("itsmysite_w3w_api_key") : null;
+  const apiKey = process.env.NEXT_PUBLIC_WHAT3WORDS_API_KEY || storedKey;
+  
+  if (apiKey) {
+    try {
+      const res = await fetch(`https://api.what3words.com/v3/convert-to-coordinates?words=${cleanW3W}&key=${apiKey}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.coordinates) {
+          return {
+            lat: data.coordinates.lat,
+            lng: data.coordinates.lng
+          };
+        }
+      }
+    } catch (err) {
+      console.error("Error calling what3words API:", err);
+    }
+  }
+  
+  return resolveWhat3WordsMock(w3w);
+}
+
 // Deterministic mock resolver for custom what3words
 export function resolveWhat3WordsMock(w3w: string): { lat: number; lng: number } {
   let cleanW3W = w3w.trim().toLowerCase();

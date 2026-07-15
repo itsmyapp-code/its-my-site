@@ -15,7 +15,8 @@ import {
   ShiftEvent, 
   Staff,
   resolvePostcode, 
-  resolveWhat3WordsMock 
+  resolveWhat3WordsMock,
+  resolveWhat3Words
 } from "@/lib/db";
 
 import L from "leaflet";
@@ -377,7 +378,8 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
         setFormMsg("Please enter a what3words address.");
         return;
       }
-      const coords = resolveWhat3WordsMock(w3wInput);
+      setFormMsg("Resolving what3words...");
+      const coords = await resolveWhat3Words(w3wInput);
       latNum = coords.lat;
       lngNum = coords.lng;
     } else if (inputMethod === "postcode") {
