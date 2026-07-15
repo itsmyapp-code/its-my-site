@@ -40,7 +40,8 @@ import {
   dbGetStaff, 
   dbGetShifts, 
   Staff, 
-  Shift 
+  Shift,
+  dbGetValidationRequests
 } from "@/lib/db";
 import { 
   signInWithEmailAndPassword, 
@@ -253,6 +254,7 @@ export default function Home() {
       let shouldPrompt = false;
       let matchedSiteName = "";
 
+      // 1. Check Scheduled Checkpoints
       for (const shift of todaysShifts) {
         const site = allSites.find((s) => s.id === shift.siteId);
         if (site && site.validationTimes && site.validationTimes.includes(timeStr)) {
@@ -260,6 +262,34 @@ export default function Home() {
           matchedSiteName = site.name;
           break;
         }
+      }
+
+      // 2. Check Instant Admin Dispatch Requests
+      try {
+        const reqs = await dbGetValidationRequests(uid);
+        const nowTime = new Date().getTime();
+        // Request triggered in the last 45 seconds
+        const recent = reqs.filter(r => (nowTime - new Date(r.timestamp).getTime()) < 45000);
+        
+        for (const req of recent) {
+          if (req.targetType === "staff") {
+            if (req.targetIds.includes(selectedStaffId || "")) {
+              shouldPrompt = true;
+              matchedSiteName = "Requested Zone";
+              break;
+            }
+          } else if (req.targetType === "site") {
+            const workerSiteIds = todaysShifts.map(s => s.siteId);
+            if (req.targetIds.some(id => workerSiteIds.includes(id))) {
+              shouldPrompt = true;
+              const matchedSite = allSites.find(s => req.targetIds.includes(s.id));
+              matchedSiteName = matchedSite ? matchedSite.name : "Target Site";
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Failed checking instant validation requests:", err);
       }
 
       if (shouldPrompt && !activePrompt) {
@@ -275,12 +305,12 @@ export default function Home() {
             Notification.requestPermission();
           }
         }
-        await dbAddAuditLog(uid, "VALIDATION_PROMPT_TRIGGERED", `Scheduled validation prompt triggered for ${timeStr} at site ${matchedSiteName}`);
+        await dbAddAuditLog(uid, "VALIDATION_PROMPT_TRIGGERED", `Validation prompt triggered for worker at site ${matchedSiteName}`);
       }
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [role, workerShifts, activePrompt, uid]);
+  }, [role, workerShifts, activePrompt, uid, selectedStaffId]);
 
   const handleOffSiteSuccess = (event: ShiftEvent) => {
     setRefreshTrigger(prev => prev + 1);

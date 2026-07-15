@@ -182,7 +182,8 @@ const MOCK_W3W_COORDINATES: Record<string, { lat: number; lng: number }> = {
   "///grows.hothouse.dined": { lat: 50.3510, lng: -3.5785 },
   "///decoding.relate.grins": { lat: 50.3425, lng: -3.5650 },
   "///mural.overnight.mending": { lat: 50.3390, lng: -3.5610 },
-  "///vocal.cushioned.gracing": { lat: 50.3520, lng: -3.5790 }
+  "///vocal.cushioned.gracing": { lat: 50.3520, lng: -3.5790 },
+  "///invested.remarried.mailer": { lat: 50.3545, lng: -3.5935 }
 };
 
 // Deterministic mock resolver for custom what3words
@@ -498,6 +499,43 @@ export async function dbAddStaff(uid: string, staff: Omit<Staff, "id">): Promise
   return id;
 }
 
+export async function dbUpdateStaff(uid: string, staffId: string, data: Partial<Staff>): Promise<void> {
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      const docRef = doc(dbInstance, "users", uid, "staff", staffId);
+      const snapshot = await getDoc(docRef);
+      if (snapshot.exists()) {
+        const existing = snapshot.data() as Staff;
+        await setDoc(docRef, sanitizeFirestoreData({ ...existing, ...data }));
+        
+        // Update staff mapping if email changed
+        if (data.email && data.email !== existing.email) {
+          if (existing.email) {
+            await dbDeleteStaffMapping(existing.email);
+          }
+          await dbAddStaffMapping(data.email, uid, staffId, data.name || existing.name);
+        }
+      }
+      return;
+    } catch (err) {
+      console.error("Error updating staff in Firestore, using local fallback:", err);
+    }
+  }
+
+  const localKey = `itsmysite_staff_${uid}`;
+  const staffList = await dbGetStaff(uid);
+  const updated = staffList.map((s) => (s.id === staffId ? { ...s, ...data } : s));
+  setLocalData(localKey, updated);
+  
+  const original = staffList.find(s => s.id === staffId);
+  if (data.email && original && data.email !== original.email) {
+    if (original.email) {
+      await dbDeleteStaffMapping(original.email);
+    }
+    await dbAddStaffMapping(data.email, uid, staffId, data.name || original.name);
+  }
+}
+
 export async function dbDeleteStaff(uid: string, staffId: string): Promise<void> {
   try {
     const staffList = await dbGetStaff(uid);
@@ -676,4 +714,55 @@ export async function dbDeleteShift(uid: string, shiftId: string): Promise<void>
   const shifts = await dbGetShifts(uid);
   const updated = shifts.filter((s) => s.id !== shiftId);
   setLocalData(localKey, updated);
+}
+
+export interface ValidationRequest {
+  id: string;
+  timestamp: string;
+  targetType: "site" | "staff";
+  targetIds: string[];
+}
+
+export async function dbAddValidationRequest(uid: string, targetType: "site" | "staff", targetIds: string[]): Promise<string> {
+  const id = "valreq-" + Date.now();
+  const req: ValidationRequest = {
+    id,
+    timestamp: new Date().toISOString(),
+    targetType,
+    targetIds,
+  };
+
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      await setDoc(doc(dbInstance, "users", uid, "validation_requests", id), sanitizeFirestoreData(req));
+      return id;
+    } catch (err) {
+      console.error("Error adding validation request to Firestore, using local fallback:", err);
+    }
+  }
+
+  const localKey = `itsmysite_validation_requests_${uid}`;
+  const requests = getLocalData<ValidationRequest[]>(localKey, []);
+  requests.push(req);
+  setLocalData(localKey, requests);
+  return id;
+}
+
+export async function dbGetValidationRequests(uid: string): Promise<ValidationRequest[]> {
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      const colRef = collection(dbInstance, "users", uid, "validation_requests");
+      const snapshot = await getDocs(colRef);
+      const requests: ValidationRequest[] = [];
+      snapshot.forEach((doc) => {
+        requests.push({ id: doc.id, ...doc.data() } as ValidationRequest);
+      });
+      return requests;
+    } catch (err) {
+      console.error("Error reading validation requests from Firestore, using local fallback:", err);
+    }
+  }
+
+  const localKey = `itsmysite_validation_requests_${uid}`;
+  return getLocalData<ValidationRequest[]>(localKey, []);
 }

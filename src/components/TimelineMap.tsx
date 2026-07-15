@@ -1,8 +1,22 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Map, Plus, Trash2, MapPin, ListOrdered, Calendar } from "lucide-react";
-import { dbGetSites, dbAddSite, dbDeleteSite, dbGetEvents, dbAddAuditLog, Site, ShiftEvent, resolvePostcode, resolveWhat3WordsMock, dbUpdateSite } from "@/lib/db";
+import { Map, Plus, Trash2, MapPin, ListOrdered, Calendar, Bell, X, Check } from "lucide-react";
+import { 
+  dbGetSites, 
+  dbAddSite, 
+  dbDeleteSite, 
+  dbGetEvents, 
+  dbAddAuditLog, 
+  dbUpdateSite,
+  dbGetStaff,
+  dbAddValidationRequest,
+  Site, 
+  ShiftEvent, 
+  Staff,
+  resolvePostcode, 
+  resolveWhat3WordsMock 
+} from "@/lib/db";
 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -60,6 +74,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any | null>(null);
   const layersGroupRef = useRef<any | null>(null);
+  const draftMarkerRef = useRef<any | null>(null);
 
   const [sites, setSites] = useState<Site[]>([]);
   const [events, setEvents] = useState<ShiftEvent[]>([]);
@@ -76,8 +91,17 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
   const [w3wInput, setW3wInput] = useState("");
   const [postcodeInput, setPostcodeInput] = useState("");
   const [associatedSiteId, setAssociatedSiteId] = useState("");
-  const [validationTimesStr, setValidationTimesStr] = useState("");
   const [newTimeInputs, setNewTimeInputs] = useState<Record<string, string>>({});
+
+  // validationTimes array state and newTimeInput state (replaces validationTimesStr)
+  const [validationTimes, setValidationTimes] = useState<string[]>([]);
+  const [newTimeInput, setNewTimeInput] = useState("");
+
+  // Instant check-in state
+  const [staffList, setStaffList] = useState<Staff[]>([]);
+  const [instantTargetType, setInstantTargetType] = useState<"site" | "staff">("site");
+  const [instantTargetIds, setInstantTargetIds] = useState<string[]>([]);
+  const [dispatchMsg, setDispatchMsg] = useState("");
   
   const [mapLoaded, setMapLoaded] = useState(false);
 
@@ -117,10 +141,37 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
     try {
       const loadedSites = await dbGetSites(uid);
       const loadedEvents = await dbGetEvents(uid);
+      const loadedStaff = await dbGetStaff(uid);
       setSites(loadedSites);
       setEvents(loadedEvents);
+      setStaffList(loadedStaff);
     } catch (err) {
       console.error("Error loading map data:", err);
+    }
+  };
+
+  const handleDispatchInstantValidation = async () => {
+    if (instantTargetIds.length === 0) return;
+    setDispatchMsg("Dispatching request...");
+    try {
+      await dbAddValidationRequest(uid, instantTargetType, instantTargetIds);
+      
+      const targetNames = instantTargetType === "site" 
+        ? sites.filter(s => instantTargetIds.includes(s.id)).map(s => s.name).join(", ")
+        : staffList.filter(s => instantTargetIds.includes(s.id)).map(s => s.name).join(", ");
+
+      await dbAddAuditLog(
+        uid,
+        "VALIDATION_REQUEST_DISPATCHED",
+        `Admin dispatched instant validation request to targeted ${instantTargetType}s: ${targetNames}`
+      );
+
+      setDispatchMsg("Request dispatched successfully!");
+      setInstantTargetIds([]);
+      setTimeout(() => setDispatchMsg(""), 3000);
+    } catch (err) {
+      console.error(err);
+      setDispatchMsg("Error dispatching validation request.");
     }
   };
 
@@ -158,17 +209,61 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       setSiteLng(lng.toFixed(6));
       setFormMsg("Coordinates pinned from map tap.");
       setTimeout(() => setFormMsg(""), 3000);
+
+      // Create or move draft marker (drop pin)
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.setLatLng([lat, lng]);
+      } else {
+        const pinIcon = L.divIcon({
+          className: "custom-draft-marker",
+          html: `<div class="w-8 h-8 bg-brand-yellow border-2 border-slate-900 rounded-full flex items-center justify-center shadow-lg animate-bounce text-slate-900 font-extrabold text-sm">📍</div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 32],
+        });
+        const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(map);
+        draftMarkerRef.current = marker;
+      }
     });
 
     setMapLoaded(true);
 
     return () => {
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.remove();
+        draftMarkerRef.current = null;
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
     };
   }, []);
+
+  // Synchronize draft pin when Lat/Lng changes manually (or via postcode/w3w resolution)
+  useEffect(() => {
+    if (!mapInstanceRef.current || !L) return;
+    const lat = parseFloat(siteLat);
+    const lng = parseFloat(siteLng);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.setLatLng([lat, lng]);
+      } else {
+        const pinIcon = L.divIcon({
+          className: "custom-draft-marker",
+          html: `<div class="w-8 h-8 bg-brand-yellow border-2 border-slate-900 rounded-full flex items-center justify-center shadow-lg animate-bounce text-slate-900 font-extrabold text-sm">📍</div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 32],
+        });
+        const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(mapInstanceRef.current);
+        draftMarkerRef.current = marker;
+      }
+    } else {
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.remove();
+        draftMarkerRef.current = null;
+      }
+    }
+  }, [siteLat, siteLng]);
 
   // Update map overlays whenever sites or events change
   useEffect(() => {
@@ -306,9 +401,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
     }
 
     const radiusNum = parseInt(siteRadius);
-    const timesArray = validationTimesStr
-      ? validationTimesStr.split(",").map(t => t.trim()).filter(t => /^\d{2}:\d{2}$/.test(t))
-      : [];
+    const timesArray = validationTimes;
 
     const siteData = {
       name: siteName,
@@ -333,7 +426,13 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       setW3wInput("");
       setPostcodeInput("");
       setAssociatedSiteId("");
-      setValidationTimesStr("");
+      setValidationTimes([]);
+      
+      if (draftMarkerRef.current) {
+        draftMarkerRef.current.remove();
+        draftMarkerRef.current = null;
+      }
+
       setFormMsg("Site registered successfully!");
       
       await dbAddAuditLog(
@@ -538,14 +637,45 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
             )}
 
             <div>
-              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Validation Times (Comma-separated)</label>
-              <input
-                type="text"
-                placeholder="e.g. 10:00, 14:00, 17:30"
-                value={validationTimesStr}
-                onChange={(e) => setValidationTimesStr(e.target.value)}
-                className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
-              />
+              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Validation Checkpoint Times</label>
+              <div className="flex gap-2">
+                <input
+                  type="time"
+                  value={newTimeInput}
+                  onChange={(e) => setNewTimeInput(e.target.value)}
+                  className="grow h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (newTimeInput && !validationTimes.includes(newTimeInput)) {
+                      setValidationTimes(prev => [...prev, newTimeInput].sort());
+                      setNewTimeInput("");
+                    }
+                  }}
+                  className="h-9 px-4 bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-350 hover:text-slate-100 text-xs font-bold uppercase tracking-wider transition rounded-none shrink-0"
+                >
+                  + Add Time
+                </button>
+              </div>
+
+              {validationTimes.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-2">
+                  {validationTimes.map((time) => (
+                    <span key={time} className="inline-flex items-center gap-1.5 px-2 py-1 bg-slate-950 border border-slate-850 text-xs font-bold text-slate-300">
+                      <span>{time}</span>
+                      <button
+                        type="button"
+                        onClick={() => setValidationTimes(prev => prev.filter(t => t !== time))}
+                        className="text-slate-500 hover:text-brand-red font-bold text-xs"
+                        title="Remove checkpoint"
+                      >
+                        &times;
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             <button
@@ -667,7 +797,122 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
               })}
             </div>
           </div>
+        </div>
 
+        {/* Validate Now Card */}
+        <div className="bg-slate-900 border border-slate-800 p-5 space-y-4">
+          <h3 className="text-base font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2 border-b border-slate-800 pb-2.5">
+            <Bell className="w-5 h-5 text-brand-yellow animate-pulse" />
+            <span>Validate Now (Instant Check-In)</span>
+          </h3>
+
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-slate-450 font-bold uppercase tracking-wider block mb-1">Target Type</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInstantTargetType("site");
+                    setInstantTargetIds([]);
+                  }}
+                  className={`flex-1 h-8 text-[11px] font-bold uppercase tracking-wider border rounded-none transition cursor-pointer ${
+                    instantTargetType === "site"
+                      ? "bg-brand-yellow border-brand-yellow text-slate-955"
+                      : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  By Work Zone (Sites)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInstantTargetType("staff");
+                    setInstantTargetIds([]);
+                  }}
+                  className={`flex-1 h-8 text-[11px] font-bold uppercase tracking-wider border rounded-none transition cursor-pointer ${
+                    instantTargetType === "staff"
+                      ? "bg-brand-yellow border-brand-yellow text-slate-955"
+                      : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  By Staff Member
+                </button>
+              </div>
+            </div>
+
+            {/* Checkbox List */}
+            <div className="space-y-2 max-h-40 overflow-y-auto border border-slate-850 p-2 bg-slate-950">
+              <label className="flex items-center gap-2 text-xs font-bold text-slate-200 cursor-pointer pb-1.5 border-b border-slate-800">
+                <input
+                  type="checkbox"
+                  checked={
+                    instantTargetType === "site"
+                      ? instantTargetIds.length === sites.length && sites.length > 0
+                      : instantTargetIds.length === staffList.length && staffList.length > 0
+                  }
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      const allIds = instantTargetType === "site" ? sites.map(s => s.id) : staffList.map(s => s.id);
+                      setInstantTargetIds(allIds);
+                    } else {
+                      setInstantTargetIds([]);
+                    }
+                  }}
+                  className="accent-brand-yellow"
+                />
+                <span>Select All {instantTargetType === "site" ? "Sites" : "Staff"}</span>
+              </label>
+
+              {instantTargetType === "site" ? (
+                sites.map(site => (
+                  <label key={site.id} className="flex items-center gap-2 text-xs text-slate-350 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={instantTargetIds.includes(site.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setInstantTargetIds(prev => [...prev, site.id]);
+                        } else {
+                          setInstantTargetIds(prev => prev.filter(id => id !== site.id));
+                        }
+                      }}
+                      className="accent-brand-yellow"
+                    />
+                    <span>{site.name}</span>
+                  </label>
+                ))
+              ) : (
+                staffList.map(staff => (
+                  <label key={staff.id} className="flex items-center gap-2 text-xs text-slate-350 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={instantTargetIds.includes(staff.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setInstantTargetIds(prev => [...prev, staff.id]);
+                        } else {
+                          setInstantTargetIds(prev => prev.filter(id => id !== staff.id));
+                        }
+                      }}
+                      className="accent-brand-yellow"
+                    />
+                    <span>{staff.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={handleDispatchInstantValidation}
+              disabled={instantTargetIds.length === 0}
+              className="w-full h-9 bg-brand-yellow hover:bg-amber-500 disabled:opacity-50 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
+            >
+              Request Validation Now ({instantTargetIds.length})
+            </button>
+
+            {dispatchMsg && <div className="text-xs text-brand-yellow font-bold animate-pulse text-center">{dispatchMsg}</div>}
+          </div>
         </div>
 
         {/* Chronological Timeline list */}

@@ -12,13 +12,16 @@ import {
   Site, 
   Staff, 
   Shift, 
-  dbAddAuditLog 
+  dbAddAuditLog,
+  dbUpdateStaff,
+  dbUpdateShift
 } from "@/lib/db";
 import { 
   Users, 
   Calendar, 
   Plus, 
   Trash2, 
+  Edit2,
   Clock, 
   CheckCircle, 
   AlertCircle, 
@@ -39,6 +42,10 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [formMsg, setFormMsg] = useState("");
+
+  // Editing States
+  const [editingStaffId, setEditingStaffId] = useState<string | null>(null);
+  const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
 
   // Staff Form state
   const [staffName, setStaffName] = useState("");
@@ -83,6 +90,23 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
     loadData();
   }, [uid, refreshTrigger]);
 
+  // Staff Edit Action Handlers
+  const handleEditStaffClick = (staff: Staff) => {
+    setEditingStaffId(staff.id);
+    setStaffName(staff.name);
+    setStaffPhone(staff.phone);
+    setStaffEmail(staff.email || "");
+    setStaffRate(staff.hourlyRate.toString());
+  };
+
+  const handleCancelEditStaff = () => {
+    setEditingStaffId(null);
+    setStaffName("");
+    setStaffPhone("");
+    setStaffEmail("");
+    setStaffRate("15.00");
+  };
+
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!staffName || !staffPhone || !staffRate) {
@@ -97,32 +121,49 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
     }
 
     try {
-      const newStaffId = await dbAddStaff(uid, {
-        name: staffName,
-        phone: staffPhone,
-        email: staffEmail.trim() || undefined,
-        hourlyRate: rateNum
-      });
+      if (editingStaffId) {
+        await dbUpdateStaff(uid, editingStaffId, {
+          name: staffName,
+          phone: staffPhone,
+          email: staffEmail.trim() || undefined,
+          hourlyRate: rateNum
+        });
 
-      await dbAddAuditLog(
-        uid,
-        "STAFF_MEMBER_CREATED",
-        `Created staff profile for ${staffName} (${staffPhone}${staffEmail.trim() ? `, Email: ${staffEmail}` : ""}) at £${rateNum.toFixed(2)}/hr.`
-      );
+        await dbAddAuditLog(
+          uid,
+          "STAFF_MEMBER_UPDATED",
+          `Updated staff profile for ${staffName} (${staffPhone}${staffEmail.trim() ? `, Email: ${staffEmail}` : ""}) at £${rateNum.toFixed(2)}/hr.`
+        );
+
+        setEditingStaffId(null);
+        setFormMsg("Staff member updated successfully.");
+      } else {
+        const newStaffId = await dbAddStaff(uid, {
+          name: staffName,
+          phone: staffPhone,
+          email: staffEmail.trim() || undefined,
+          hourlyRate: rateNum
+        });
+
+        await dbAddAuditLog(
+          uid,
+          "STAFF_MEMBER_CREATED",
+          `Created staff profile for ${staffName} (${staffPhone}${staffEmail.trim() ? `, Email: ${staffEmail}` : ""}) at £${rateNum.toFixed(2)}/hr.`
+        );
+        setFormMsg("Staff member added successfully.");
+      }
 
       setStaffName("");
       setStaffPhone("");
       setStaffEmail("");
       setStaffRate("15.00");
-      setFormMsg("Staff member added successfully.");
       setTimeout(() => setFormMsg(""), 3000);
       
-      // Reload
       await loadData();
       onDataModified();
     } catch (err) {
       console.error(err);
-      setFormMsg("Error adding staff member.");
+      setFormMsg("Error saving staff member.");
     }
   };
 
@@ -131,13 +172,34 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
       try {
         await dbDeleteStaff(uid, id);
         await dbAddAuditLog(uid, "STAFF_MEMBER_DELETED", `Deleted staff profile: ${name} (ID: ${id})`);
-        
+        if (editingStaffId === id) {
+          handleCancelEditStaff();
+        }
         await loadData();
         onDataModified();
       } catch (err) {
         console.error(err);
       }
     }
+  };
+
+  // Shift Edit Action Handlers
+  const handleEditShiftClick = (shift: Shift) => {
+    setEditingShiftId(shift.id);
+    setSelectedStaffId(shift.staffId);
+    setSelectedSiteId(shift.siteId);
+    setShiftDate(shift.date);
+    setShiftEndDate(""); // clear bulk end date
+    setShiftStartTime(shift.startTime);
+    setShiftHours(shift.hours.toString());
+  };
+
+  const handleCancelEditShift = () => {
+    setEditingShiftId(null);
+    setShiftDate("");
+    setShiftEndDate("");
+    setShiftStartTime("09:00");
+    setShiftHours("8");
   };
 
   const handleAddShift = async (e: React.FormEvent) => {
@@ -162,54 +224,73 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
     }
 
     try {
-      const start = new Date(shiftDate);
-      const end = shiftEndDate ? new Date(shiftEndDate) : new Date(shiftDate);
+      if (editingShiftId) {
+        await dbUpdateShift(uid, editingShiftId, {
+          staffId: selectedStaffId,
+          staffName: staff.name,
+          siteId: selectedSiteId,
+          siteName: site.name,
+          date: shiftDate,
+          startTime: shiftStartTime,
+          hours: hoursNum,
+        });
 
-      if (end < start) {
-        setFormMsg("End date cannot be before start date.");
-        return;
-      }
+        await dbAddAuditLog(
+          uid,
+          "SHIFT_UPDATED",
+          `Updated shift ID ${editingShiftId} for ${staff.name} at ${site.name} on ${shiftDate}.`
+        );
 
-      let scheduledCount = 0;
-      // Loop daily from start date to end date
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        // Map: Sunday=0, Monday=1, ..., Saturday=6
-        // repeatDays array: Mon=0, Tue=1, ..., Sun=6
-        const dayOfWeek = d.getDay();
-        const repeatIdx = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        setEditingShiftId(null);
+        setFormMsg("Shift updated successfully.");
+        handleCancelEditShift();
+      } else {
+        const start = new Date(shiftDate);
+        const end = shiftEndDate ? new Date(shiftEndDate) : new Date(shiftDate);
 
-        if (repeatDays[repeatIdx]) {
-          const dateStr = d.toISOString().split("T")[0];
-          await dbAddShift(uid, {
-            staffId: selectedStaffId,
-            staffName: staff.name,
-            siteId: selectedSiteId,
-            siteName: site.name,
-            date: dateStr,
-            startTime: shiftStartTime,
-            hours: hoursNum,
-            validated: false
-          });
-          scheduledCount++;
+        if (end < start) {
+          setFormMsg("End date cannot be before start date.");
+          return;
         }
+
+        let scheduledCount = 0;
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          const dayOfWeek = d.getDay();
+          const repeatIdx = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+          if (repeatDays[repeatIdx]) {
+            const dateStr = d.toISOString().split("T")[0];
+            await dbAddShift(uid, {
+              staffId: selectedStaffId,
+              staffName: staff.name,
+              siteId: selectedSiteId,
+              siteName: site.name,
+              date: dateStr,
+              startTime: shiftStartTime,
+              hours: hoursNum,
+              validated: false
+            });
+            scheduledCount++;
+          }
+        }
+
+        if (scheduledCount === 0) {
+          setFormMsg("No shifts created. Check weekday selections.");
+          return;
+        }
+
+        await dbAddAuditLog(
+          uid,
+          "SHIFT_PATTERN_SCHEDULED",
+          `Scheduled ${scheduledCount} shifts of ${hoursNum}hr for ${staff.name} at ${site.name} between ${shiftDate} and ${shiftEndDate || shiftDate}.`
+        );
+
+        setShiftDate("");
+        setShiftEndDate("");
+        setFormMsg(`Successfully scheduled ${scheduledCount} shifts.`);
       }
 
-      if (scheduledCount === 0) {
-        setFormMsg("No shifts created. Check weekday selections.");
-        return;
-      }
-
-      await dbAddAuditLog(
-        uid,
-        "SHIFT_PATTERN_SCHEDULED",
-        `Scheduled ${scheduledCount} shifts of ${hoursNum}hr for ${staff.name} at ${site.name} between ${shiftDate} and ${shiftEndDate || shiftDate}.`
-      );
-
-      setShiftDate("");
-      setShiftEndDate("");
-      setFormMsg(`Successfully scheduled ${scheduledCount} shifts.`);
       setTimeout(() => setFormMsg(""), 3000);
-
       await loadData();
       onDataModified();
     } catch (err) {
@@ -223,7 +304,9 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
       try {
         await dbDeleteShift(uid, id);
         await dbAddAuditLog(uid, "SHIFT_DELETED", `Removed shift ID: ${id} (Staff: ${staffName}, Site: ${siteName})`);
-        
+        if (editingShiftId === id) {
+          handleCancelEditShift();
+        }
         await loadData();
         onDataModified();
       } catch (err) {
@@ -271,7 +354,7 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
             <Users className="w-5 h-5 text-brand-blue" />
             <span>Staff Directory</span>
           </h3>
-          <form onSubmit={handleAddStaff} className="space-y-3">
+          <form onSubmit={handleAddStaff} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Full Name</label>
@@ -307,23 +390,33 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
               </div>
               <div>
                 <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Hourly Rate (£/hr)</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="15.00"
-                    value={staffRate}
-                    onChange={(e) => setStaffRate(e.target.value)}
-                    className="h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none grow text-sm"
-                    required
-                  />
-                  <button
-                    type="submit"
-                    className="h-9 px-5 bg-brand-blue hover:bg-blue-600 text-slate-950 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none shrink-0 text-sm"
-                  >
-                    <Plus className="w-4 h-4 inline mr-1" /> Add Staff
-                  </button>
-                </div>
+                <input
+                  type="text"
+                  placeholder="15.00"
+                  value={staffRate}
+                  onChange={(e) => setStaffRate(e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-sm"
+                  required
+                />
               </div>
+            </div>
+            
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="flex-1 h-9 bg-brand-blue hover:bg-blue-600 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
+              >
+                {editingStaffId ? "Save Staff Changes" : "Register Staff Member"}
+              </button>
+              {editingStaffId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditStaff}
+                  className="h-9 px-4 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-350 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </form>
 
@@ -339,13 +432,22 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                       Phone: {staff.phone} {staff.email ? `| Email: ${staff.email}` : ""} | Rate: £{staff.hourlyRate.toFixed(2)}/hr
                     </span>
                   </div>
-                  <button
-                    onClick={() => handleDeleteStaff(staff.id, staff.name)}
-                    className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
-                    title="Remove staff member"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleEditStaffClick(staff)}
+                      className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-blue rounded transition cursor-pointer"
+                      title="Edit staff member"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteStaff(staff.id, staff.name)}
+                      className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
+                      title="Remove staff member"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -453,23 +555,33 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
               
               <div>
                 <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Start Time</label>
-                <div className="flex gap-2">
-                  <input
-                    type="time"
-                    value={shiftStartTime}
-                    onChange={(e) => setShiftStartTime(e.target.value)}
-                    className="h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none grow text-sm"
-                    required
-                  />
-                  <button
-                    type="submit"
-                    disabled={staffList.length === 0 || sites.length === 0}
-                    className="h-9 px-5 bg-brand-yellow hover:bg-amber-500 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none shrink-0 text-sm disabled:opacity-50"
-                  >
-                    Schedule Shifts
-                  </button>
-                </div>
+                <input
+                  type="time"
+                  value={shiftStartTime}
+                  onChange={(e) => setShiftStartTime(e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-sm"
+                  required
+                />
               </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="submit"
+                disabled={staffList.length === 0 || sites.length === 0}
+                className="flex-1 h-9 bg-brand-yellow hover:bg-amber-500 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs disabled:opacity-50"
+              >
+                {editingShiftId ? "Save Shift Changes" : "Schedule Shifts"}
+              </button>
+              {editingShiftId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditShift}
+                  className="h-9 px-4 bg-slate-955 hover:bg-slate-800 border border-slate-800 text-slate-350 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none text-xs"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </form>
           
@@ -498,7 +610,7 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                 const estimatedCost = shift.hours * rate;
 
                 return (
-                  <div key={shift.id} className="p-3 bg-slate-950 border border-slate-850 rounded-none flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div key={shift.id} className="p-3 bg-slate-955 border border-slate-850 rounded-none flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-slate-100 text-sm">{shift.staffName}</span>
@@ -528,13 +640,22 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                         </span>
                       </div>
                       
-                      <button
-                        onClick={() => handleDeleteShift(shift.id, shift.staffName, shift.siteName)}
-                        className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
-                        title="Delete shift"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleEditShiftClick(shift)}
+                          className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-blue rounded transition cursor-pointer"
+                          title="Edit shift"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteShift(shift.id, shift.staffName, shift.siteName)}
+                          className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
+                          title="Delete shift"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
