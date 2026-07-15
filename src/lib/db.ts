@@ -187,13 +187,27 @@ const MOCK_W3W_COORDINATES: Record<string, { lat: number; lng: number }> = {
   "///invested.remarried.mailer": { lat: 50.3545, lng: -3.5935 }
 };
 
-// Resolve what3words using live API if key is available, fallback to mock resolver
+// Resolve what3words using server route or live API, fallback to mock resolver
 export async function resolveWhat3Words(w3w: string): Promise<{ lat: number; lng: number }> {
   let cleanW3W = w3w.trim().toLowerCase();
   if (cleanW3W.startsWith("///")) {
     cleanW3W = cleanW3W.slice(3);
   }
   
+  // 1. Try our server-side API proxy (keyless web-scraping resolver)
+  try {
+    const res = await fetch(`/api/resolve-w3w?words=${encodeURIComponent(cleanW3W)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.lat !== undefined && data.lng !== undefined) {
+        return { lat: data.lat, lng: data.lng };
+      }
+    }
+  } catch (err) {
+    console.error("Error calling server-side resolve-w3w proxy:", err);
+  }
+
+  // 2. Try live official API if key is available
   const storedKey = typeof window !== "undefined" ? localStorage.getItem("itsmysite_w3w_api_key") : null;
   const apiKey = process.env.NEXT_PUBLIC_WHAT3WORDS_API_KEY || storedKey;
   

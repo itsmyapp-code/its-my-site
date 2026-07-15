@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { LogOut, Clock, Check, HelpCircle } from "lucide-react";
-import { dbAddEvent, dbAddAuditLog, validateWhat3Words, ShiftEvent, resolvePostcode, resolveWhat3WordsMock, dbGetSites, dbGetShifts, Site } from "@/lib/db";
+import { dbAddEvent, dbAddAuditLog, validateWhat3Words, ShiftEvent, resolvePostcode, resolveWhat3Words, dbGetSites, dbGetShifts, Site } from "@/lib/db";
 
 interface OffSiteModuleProps {
   uid: string;
@@ -133,7 +133,7 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
           return;
         }
         cleanW3W = w3wClean;
-        const coords = resolveWhat3WordsMock(w3wClean);
+        const coords = await resolveWhat3Words(w3wClean);
         lat = coords.lat;
         lng = coords.lng;
         const matchedSuggestion = MOCK_W3W_SUGGESTIONS.find(s => s.w3w === w3wClean);
