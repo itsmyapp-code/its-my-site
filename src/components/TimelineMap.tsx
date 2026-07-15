@@ -318,7 +318,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       // Custom divicon for site center (coloured center)
       const siteIcon = L.divIcon({
         className: "custom-site-icon",
-        html: `<div class="w-3.5 h-3.5 rounded-full border-2 border-slate-950 ${colorInfo.bg} shadow-md"></div>`,
+        html: `<div style="width: 14px; height: 14px; border-radius: 9999px; border: 2px solid #0f172a; background-color: ${colorInfo.hex}; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);"></div>`,
         iconSize: [14, 14],
         iconAnchor: [7, 7],
       });
@@ -339,17 +339,17 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
 
     // 2. Draw Check-ins / Transit Events chronologically
     events.forEach((evt, idx) => {
-      let pinColor = "bg-brand-red"; // Default check-in is Bright Red
+      let pinHex = "#ef4444"; // Default check-in is Bright Red
       let evtLabel = "CHECK-IN";
 
       const matchedSite = sites.find(s => evt.locationName.includes(s.name));
       if (matchedSite) {
-        pinColor = getSiteColor(matchedSite.name).bg;
+        pinHex = getSiteColor(matchedSite.type, matchedSite.name).hex;
       } else if (evt.type === "depart") {
-        pinColor = "bg-brand-yellow"; // Departure is Solar Yellow
+        pinHex = "#eab308"; // Departure is Solar Yellow
         evtLabel = "DEPART TRANSIT";
       } else if (evt.type === "return") {
-        pinColor = "bg-emerald-500";
+        pinHex = "#10b981";
         evtLabel = "RETURN ON-SITE";
       }
 
@@ -357,9 +357,9 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       const customIcon = L.divIcon({
         className: "custom-path-icon",
         html: `
-          <div class="relative flex items-center justify-center">
-            <span class="absolute inline-flex h-7 w-7 rounded-full ${pinColor} opacity-30 animate-ping"></span>
-            <div class="w-6 h-6 rounded-full border border-slate-950 text-xs text-slate-950 font-bold flex items-center justify-center shadow-lg ${pinColor}">
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px;">
+            <span style="position: absolute; display: inline-flex; width: 28px; height: 28px; border-radius: 9999px; background-color: ${pinHex}; opacity: 0.3;"></span>
+            <div style="width: 24px; height: 24px; border-radius: 9999px; border: 1px solid #0f172a; font-size: 11px; color: #ffffff; font-weight: 800; display: flex; align-items: center; justify-content: center; background-color: ${pinHex}; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.35);">
               ${idx + 1}
             </div>
           </div>
