@@ -167,6 +167,19 @@ export default function Home() {
     }
   }, [uid, refreshTrigger, selectedStaffId, role, staffId, loadingAuth]);
 
+  // Register Service Worker for PWA support
+  useEffect(() => {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js")
+        .then((registration) => {
+          console.log("ServiceWorker registration successful with scope: ", registration.scope);
+        })
+        .catch((err) => {
+          console.log("ServiceWorker registration failed: ", err);
+        });
+    }
+  }, []);
+
   const handleValidationSuccess = (event: ShiftEvent) => {
     setRefreshTrigger(prev => prev + 1);
   };
