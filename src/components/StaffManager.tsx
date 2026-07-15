@@ -316,6 +316,15 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
   };
 
   // Calculate totals
+  const formatUKDate = (dateStr: string): string => {
+    if (!dateStr) return "";
+    const parts = dateStr.split("-");
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
   const totalScheduledHours = shifts.reduce((sum, s) => sum + s.hours, 0);
   const totalValidatedHours = shifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
   
@@ -610,50 +619,50 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                 const estimatedCost = shift.hours * rate;
 
                 return (
-                  <div key={shift.id} className="p-3 bg-slate-955 border border-slate-850 rounded-none flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-slate-100 text-sm">{shift.staffName}</span>
-                        <span className="px-2 py-0.5 text-[9px] font-bold border rounded-none uppercase tracking-wider leading-none bg-slate-900 text-slate-400 border-slate-800">
+                  <div key={shift.id} className="p-4 bg-slate-955 border border-slate-800 rounded-none flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 hover:border-slate-700 transition">
+                    <div className="space-y-1.5 grow">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <span className="font-extrabold text-slate-100 text-base">{shift.staffName}</span>
+                        <span className="px-2.5 py-1 text-[11px] font-extrabold border rounded-none uppercase tracking-wider leading-none bg-slate-900 text-slate-350 border-slate-800">
                           {shift.hours} hrs
                         </span>
                       </div>
                       
-                      <div className="text-slate-400 text-xs">
-                        Site: <strong className="text-slate-300">{shift.siteName}</strong>
+                      <div className="text-slate-300 text-sm">
+                        Site: <strong className="text-brand-blue font-bold">{shift.siteName}</strong>
                       </div>
                       
-                      <div className="text-[10px] text-slate-500">
-                        Date: {shift.date} | Start: {shift.startTime} | Rate: £{rate.toFixed(2)}/hr
+                      <div className="text-xs font-semibold text-slate-450">
+                        Date: <span className="text-slate-200">{formatUKDate(shift.date)}</span> | Start: <span className="text-slate-200">{shift.startTime}</span> | Rate: <span className="text-slate-200">£{rate.toFixed(2)}/hr</span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3 w-full sm:w-auto shrink-0 justify-between sm:justify-end border-t border-slate-900 sm:border-t-0 pt-2 sm:pt-0">
-                      <div className="text-right">
-                        <div className="text-sm font-extrabold text-brand-yellow">£{estimatedCost.toFixed(2)}</div>
-                        <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-none uppercase tracking-wider leading-none block mt-1 ${
+                    <div className="flex items-center gap-4 w-full sm:w-auto shrink-0 justify-between sm:justify-end border-t border-slate-900 sm:border-t-0 pt-3 sm:pt-0">
+                      <div className="text-left sm:text-right">
+                        <div className="text-lg font-black text-brand-yellow">£{estimatedCost.toFixed(2)}</div>
+                        <span className={`px-2.5 py-1 text-[10px] font-extrabold border rounded-none uppercase tracking-wider leading-none block mt-1 text-center ${
                           shift.validated 
                             ? "bg-emerald-950 text-emerald-400 border-emerald-800" 
-                            : "bg-slate-900 text-rose-400 border-rose-950"
+                            : "bg-slate-900 text-rose-450 border-rose-955"
                         }`}>
                           {shift.validated ? "VALIDATED" : "UNVERIFIED"}
                         </span>
                       </div>
                       
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => handleEditShiftClick(shift)}
-                          className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-blue rounded transition cursor-pointer"
+                          className="p-1.5 hover:bg-slate-850 text-slate-400 hover:text-brand-blue rounded transition cursor-pointer"
                           title="Edit shift"
                         >
-                          <Edit2 className="w-3.5 h-3.5" />
+                          <Edit2 className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDeleteShift(shift.id, shift.staffName, shift.siteName)}
-                          className="p-1.5 hover:bg-slate-850 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
+                          className="p-1.5 hover:bg-slate-850 text-slate-400 hover:text-brand-red rounded transition cursor-pointer"
                           title="Delete shift"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
