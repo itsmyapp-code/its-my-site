@@ -15,7 +15,9 @@ import {
   Menu,
   X,
   Loader2,
-  LogOut
+  LogOut,
+  Eye,
+  EyeOff
 } from "lucide-react";
 
 // Components
@@ -43,7 +45,8 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signOut, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  sendPasswordResetEmail
 } from "firebase/auth";
 import dynamic from "next/dynamic";
 
@@ -709,9 +712,12 @@ export default function Home() {
 
 function LoginScreen() {
   const [isRegister, setIsRegister] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -759,8 +765,35 @@ function LoginScreen() {
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) {
+      setError("Please enter your email address.");
+      return;
+    }
+    setError("");
+    setResetMessage("");
+    setLoading(true);
+
+    try {
+      await sendPasswordResetEmail(authInstance, email.trim());
+      setResetMessage("Password reset email sent! Please check your inbox.");
+    } catch (err: any) {
+      console.error(err);
+      let errMsg = "Failed to send password reset email. Please verify the email address.";
+      if (err.code === "auth/invalid-email") {
+        errMsg = "Invalid email address format.";
+      } else if (err.code === "auth/user-not-found") {
+        errMsg = "No account found with this email.";
+      }
+      setError(errMsg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="flex-1 flex items-center justify-center min-h-screen bg-slate-955 px-4 py-12 font-mono text-sm text-slate-350">
+    <div className="flex-1 flex items-center justify-center min-h-screen bg-slate-955 px-4 py-12 font-mono text-sm text-slate-355">
       <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-8 shadow-2xl relative overflow-hidden">
         {/* Decorative Top Bar */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-brand-blue" />
@@ -775,60 +808,141 @@ function LoginScreen() {
           <p className="text-xs text-slate-500 font-bold mt-1">GEOFENCING & SHIFT MANAGEMENT PORTAL</p>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="p-3 bg-rose-955/50 border border-rose-900 text-rose-350 font-bold text-xs">
-              {error}
+        {isForgotPassword ? (
+          /* Forgot Password View */
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-2">Reset Password</h3>
+            <p className="text-xs text-slate-500 leading-normal">
+              Enter your email address below, and we will send you a secure link to reset your password.
+            </p>
+
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              {error && (
+                <div className="p-3 bg-rose-955/50 border border-rose-900 text-rose-350 font-bold text-xs">
+                  {error}
+                </div>
+              )}
+              {resetMessage && (
+                <div className="p-3 bg-emerald-955/50 border border-emerald-800 text-emerald-350 font-bold text-xs">
+                  {resetMessage}
+                </div>
+              )}
+
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Email Address</label>
+                <input
+                  type="email"
+                  placeholder="operator@company.co.uk"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full h-10 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer border-none"
+              >
+                {loading ? (
+                  <span className="animate-pulse">SENDING RESET LINK...</span>
+                ) : (
+                  <span>Send Reset Link</span>
+                )}
+              </button>
+            </form>
+
+            <div className="mt-6 text-center pt-4 border-t border-slate-850">
+              <button
+                onClick={() => { setIsForgotPassword(false); setError(""); setResetMessage(""); }}
+                className="text-xs text-slate-400 hover:text-brand-blue font-bold uppercase transition cursor-pointer bg-transparent border-none"
+              >
+                Back to Sign In
+              </button>
             </div>
-          )}
-
-          <div>
-            <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Email Address</label>
-            <input
-              type="email"
-              placeholder="operator@company.co.uk"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
-              required
-            />
           </div>
-
-          <div>
-            <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Password</label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full h-10 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer border-none"
-          >
-            {loading ? (
-              <span className="animate-pulse">AUTHENTICATING...</span>
-            ) : (
-              <span>{isRegister ? "Register Admin Account" : "Secure Log In"}</span>
+        ) : (
+          /* Sign In / Register View */
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && (
+              <div className="p-3 bg-rose-955/50 border border-rose-900 text-rose-350 font-bold text-xs">
+                {error}
+              </div>
             )}
-          </button>
-        </form>
+
+            <div>
+              <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Email Address</label>
+              <input
+                type="email"
+                placeholder="operator@company.co.uk"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full h-10 pl-3 pr-10 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-350 cursor-pointer bg-transparent border-none"
+                  title={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              
+              {!isRegister && (
+                <div className="flex justify-between items-center mt-1.5">
+                  <span />
+                  <button
+                    type="button"
+                    onClick={() => { setIsForgotPassword(true); setError(""); setResetMessage(""); }}
+                    className="text-xs text-slate-500 hover:text-brand-blue font-bold transition bg-transparent border-none cursor-pointer"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full h-10 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer border-none"
+            >
+              {loading ? (
+                <span className="animate-pulse">AUTHENTICATING...</span>
+              ) : (
+                <span>{isRegister ? "Register Admin Account" : "Secure Log In"}</span>
+              )}
+            </button>
+          </form>
+        )}
 
         {/* Toggle Mode */}
-        <div className="mt-6 text-center pt-4 border-t border-slate-850">
-          <button
-            onClick={() => { setIsRegister(!isRegister); setError(""); }}
-            className="text-xs text-slate-400 hover:text-brand-blue font-bold uppercase transition cursor-pointer bg-transparent border-none"
-          >
-            {isRegister ? "Already have an account? Sign In" : "Need to set up a new company? Register Admin"}
-          </button>
-        </div>
+        {!isForgotPassword && (
+          <div className="mt-6 text-center pt-4 border-t border-slate-850">
+            <button
+              onClick={() => { setIsRegister(!isRegister); setError(""); }}
+              className="text-xs text-slate-400 hover:text-brand-blue font-bold uppercase transition cursor-pointer bg-transparent border-none"
+            >
+              {isRegister ? "Already have an account? Sign In" : "Need to set up a new company? Register Admin"}
+            </button>
+          </div>
+        )}
 
         {/* Compliance Note */}
         <p className="text-[10px] text-slate-600 leading-normal mt-8 text-center font-semibold uppercase tracking-wider">
