@@ -242,8 +242,8 @@ export async function dbGetSites(uid: string): Promise<Site[]> {
       snapshot.forEach((doc) => {
         sites.push({ id: doc.id, ...doc.data() } as Site);
       });
-      // If Firestore contains nothing, write default mock sites there
-      if (sites.length === 0) {
+      // If Firestore contains nothing and we are in the demo sandbox, write default mock sites
+      if (sites.length === 0 && uid === "admin-worker-hybrid-101") {
         for (const site of DEFAULT_SITES) {
           const { id, ...rest } = site;
           await setDoc(doc(colRef, id), rest);
@@ -259,7 +259,7 @@ export async function dbGetSites(uid: string): Promise<Site[]> {
   // LocalStorage Fallback
   const localKey = `itsmysite_sites_${uid}`;
   let sites = getLocalData<Site[]>(localKey, []);
-  if (sites.length === 0) {
+  if (sites.length === 0 && uid === "admin-worker-hybrid-101") {
     sites = [...DEFAULT_SITES];
     setLocalData(localKey, sites);
   }
@@ -444,7 +444,7 @@ export async function dbGetStaff(uid: string): Promise<Staff[]> {
       snapshot.forEach((doc) => {
         staff.push({ id: doc.id, ...doc.data() } as Staff);
       });
-      if (staff.length === 0) {
+      if (staff.length === 0 && uid === "admin-worker-hybrid-101") {
         for (const item of DEFAULT_STAFF) {
           const { id, ...rest } = item;
           await setDoc(doc(colRef, id), rest);
@@ -462,7 +462,7 @@ export async function dbGetStaff(uid: string): Promise<Staff[]> {
 
   const localKey = `itsmysite_staff_${uid}`;
   let staff = getLocalData<Staff[]>(localKey, []);
-  if (staff.length === 0) {
+  if (staff.length === 0 && uid === "admin-worker-hybrid-101") {
     staff = [...DEFAULT_STAFF];
     setLocalData(localKey, staff);
     for (const item of staff) {
@@ -609,7 +609,7 @@ export async function dbGetShifts(uid: string): Promise<Shift[]> {
       snapshot.forEach((doc) => {
         shifts.push({ id: doc.id, ...doc.data() } as Shift);
       });
-      if (shifts.length === 0) {
+      if (shifts.length === 0 && uid === "admin-worker-hybrid-101") {
         for (const item of DEFAULT_SHIFTS) {
           const { id, ...rest } = item;
           await setDoc(doc(colRef, id), rest);
@@ -624,7 +624,7 @@ export async function dbGetShifts(uid: string): Promise<Shift[]> {
 
   const localKey = `itsmysite_shifts_${uid}`;
   let shifts = getLocalData<Shift[]>(localKey, []);
-  if (shifts.length === 0) {
+  if (shifts.length === 0 && uid === "admin-worker-hybrid-101") {
     shifts = [...DEFAULT_SHIFTS];
     setLocalData(localKey, shifts);
   }

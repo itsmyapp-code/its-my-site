@@ -233,8 +233,8 @@ export default function Home() {
 
           {/* VIEWPORT MODE SELECTOR & MENU */}
           <div className="flex items-center gap-3">
-            {/* Show simulator toggle ONLY for Admins or in sandbox mode */}
-            {(role === "admin" || !staffId) && (
+            {/* Show simulator toggle ONLY in sandbox mode (when no user is logged in) */}
+            {!user ? (
               <div className="flex items-center gap-2.5 bg-slate-950 border border-slate-850 p-1.5 rounded-none text-xs sm:text-sm">
                 <span className="text-slate-500 font-bold px-2 uppercase tracking-wide">SIMULATOR:</span>
                 <button
@@ -257,6 +257,12 @@ export default function Home() {
                 >
                   Field Worker App
                 </button>
+              </div>
+            ) : (
+              /* If logged in, show their email details */
+              <div className="flex items-center gap-2 bg-slate-950 border border-slate-850 px-3 py-2 rounded-none text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>{role === "admin" ? "ADMIN" : "STAFF"}: {user.email}</span>
               </div>
             )}
 
