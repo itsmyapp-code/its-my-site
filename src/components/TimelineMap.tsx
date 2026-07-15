@@ -137,6 +137,35 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
     }
   };
 
+  const handleAddTransitDestination = async (siteId: string, name: string, address: string) => {
+    const site = sites.find(s => s.id === siteId);
+    if (!site) return;
+    const currentDests = site.transitDestinations || [];
+    if (currentDests.some(d => d.name.toLowerCase() === name.toLowerCase())) return;
+    
+    const updatedDests = [...currentDests, { name, address }];
+    try {
+      await dbUpdateSite(uid, siteId, { transitDestinations: updatedDests });
+      await dbAddAuditLog(uid, "TRANSIT_DESTINATIONS_UPDATED", `Added transit destination ${name} (${address}) to site ${site.name}`);
+      loadData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRemoveTransitDestination = async (siteId: string, nameToRemove: string) => {
+    const site = sites.find(s => s.id === siteId);
+    if (!site) return;
+    const updatedDests = (site.transitDestinations || []).filter(d => d.name !== nameToRemove);
+    try {
+      await dbUpdateSite(uid, siteId, { transitDestinations: updatedDests });
+      await dbAddAuditLog(uid, "TRANSIT_DESTINATIONS_UPDATED", `Removed transit destination ${nameToRemove} from site ${site.name}`);
+      loadData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // Load sites and events from DB
   const loadData = async () => {
     try {
@@ -789,6 +818,60 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
                           type="button"
                           onClick={() => handleAddValidationTimeDirect(site.id)}
                           className="h-6 px-2 bg-slate-950 hover:bg-slate-850 border border-slate-805 text-slate-400 hover:text-slate-200 text-[10px] font-bold uppercase tracking-wider rounded-none transition"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Transit Destinations manager */}
+                    <div className="pl-2 border-l border-slate-800 space-y-1 mt-2">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Likely Transit Destinations:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(site.transitDestinations || []).map((dest) => (
+                          <span key={dest.name} className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-slate-950 border border-slate-850 text-[10px] font-bold text-slate-400">
+                            <span>{dest.name} ({dest.address})</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTransitDestination(site.id, dest.name)}
+                              className="text-slate-650 hover:text-brand-red font-bold text-xs"
+                              title="Remove destination"
+                            >
+                              &times;
+                            </button>
+                          </span>
+                        ))}
+                        {(site.transitDestinations || []).length === 0 && (
+                          <span className="text-[10px] text-slate-650 italic">None configured</span>
+                        )}
+                      </div>
+                      
+                      {/* Add transit destination input form */}
+                      <div className="flex gap-1 items-center pt-1.5">
+                        <input
+                          type="text"
+                          id={`dest-name-${site.id}`}
+                          placeholder="Name (e.g. Depot)"
+                          className="h-6 w-20 px-1 bg-slate-955 border border-slate-850 text-slate-350 outline-none text-[10px] rounded-none font-bold"
+                        />
+                        <input
+                          type="text"
+                          id={`dest-addr-${site.id}`}
+                          placeholder="Address (postcode/w3w)"
+                          className="h-6 w-24 px-1 bg-slate-955 border border-slate-850 text-slate-355 outline-none text-[10px] rounded-none font-bold"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nameInput = document.getElementById(`dest-name-${site.id}`) as HTMLInputElement;
+                            const addrInput = document.getElementById(`dest-addr-${site.id}`) as HTMLInputElement;
+                            if (nameInput && addrInput && nameInput.value.trim() && addrInput.value.trim()) {
+                              handleAddTransitDestination(site.id, nameInput.value.trim(), addrInput.value.trim());
+                              nameInput.value = "";
+                              addrInput.value = "";
+                            }
+                          }}
+                          className="h-6 px-1.5 bg-slate-950 hover:bg-slate-850 border border-slate-805 text-slate-400 hover:text-slate-200 text-[10px] font-bold uppercase tracking-wider rounded-none transition"
                         >
                           + Add
                         </button>

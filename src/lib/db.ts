@@ -28,6 +28,7 @@ export interface Site {
   what3words?: string;
   postcode?: string;
   validationTimes?: string[];
+  transitDestinations?: { name: string; address: string }[];
 }
 
 export interface ShiftEvent {

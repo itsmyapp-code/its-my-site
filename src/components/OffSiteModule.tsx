@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { LogOut, Clock, Check, HelpCircle } from "lucide-react";
-import { dbAddEvent, dbAddAuditLog, validateWhat3Words, ShiftEvent, resolvePostcode, resolveWhat3WordsMock } from "@/lib/db";
+import { dbAddEvent, dbAddAuditLog, validateWhat3Words, ShiftEvent, resolvePostcode, resolveWhat3WordsMock, dbGetSites, dbGetShifts, Site } from "@/lib/db";
 
 interface OffSiteModuleProps {
   uid: string;
@@ -35,6 +35,40 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const [sites, setSites] = useState<Site[]>([]);
+  const [todaySite, setTodaySite] = useState<Site | null>(null);
+
+  useEffect(() => {
+    async function loadSitesAndActive() {
+      try {
+        const loadedSites = await dbGetSites(uid);
+        setSites(loadedSites);
+
+        if (selectedStaffId) {
+          const shifts = await dbGetShifts(uid);
+          const todayStr = new Date().toISOString().split("T")[0];
+          const workerTodayShifts = shifts.filter(s => s.staffId === selectedStaffId && s.date === todayStr);
+          if (workerTodayShifts.length > 0) {
+            const activeShift = workerTodayShifts[0];
+            const matchedSite = loadedSites.find(s => s.id === activeShift.siteId);
+            if (matchedSite) {
+              setTodaySite(matchedSite);
+            } else {
+              setTodaySite(null);
+            }
+          } else {
+            setTodaySite(null);
+          }
+        } else {
+          setTodaySite(null);
+        }
+      } catch (err) {
+        console.error("Error loading active site for logger:", err);
+      }
+    }
+    loadSitesAndActive();
+  }, [uid, selectedStaffId]);
 
   // Handle typing suggestions
   useEffect(() => {
@@ -237,6 +271,44 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
             ))}
           </div>
         </div>
+
+        {/* Suggested Destinations based on todaySite */}
+        {todaySite && todaySite.transitDestinations && todaySite.transitDestinations.length > 0 && (
+          <div className="bg-slate-950 border border-slate-850 p-3 space-y-2">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
+              Suggested Transit Destinations:
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {todaySite.transitDestinations.map((dest) => (
+                <button
+                  key={dest.name}
+                  type="button"
+                  onClick={() => {
+                    const addr = dest.address.trim();
+                    if (addr.startsWith("///")) {
+                      setInputMethod("w3w");
+                      setW3wInput(addr);
+                    } else if (/^[a-zA-Z]{1,2}\d[a-zA-Z\d]?\s*\d[a-zA-Z]{2}$/.test(addr.replace(/\s+/g, "")) || addr.length <= 8) {
+                      setInputMethod("postcode");
+                      setPostcodeInput(addr);
+                    } else {
+                      setInputMethod("coords");
+                      const parts = addr.split(",");
+                      if (parts.length === 2) {
+                        setLatInput(parts[0].trim());
+                        setLngInput(parts[1].trim());
+                      }
+                    }
+                  }}
+                  className="p-2 border border-slate-800 bg-slate-900 hover:bg-slate-850 text-left text-xs font-semibold text-slate-350 hover:text-slate-100 transition rounded-none flex items-center justify-between cursor-pointer"
+                >
+                  <span className="truncate">{dest.name}</span>
+                  <span className="text-[10px] text-brand-blue font-bold font-mono">{dest.address}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Conditional inputs */}
         {inputMethod === "w3w" && (

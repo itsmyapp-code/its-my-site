@@ -52,14 +52,21 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
     loadSites();
   }, [uid]);
 
-  // Pre-configured simulated GPS spots for easy testing
+  // Dynamically constructed GPS simulation options based on active database sites + actual GPS
   const mockLocations = [
     { name: "Actual GPS", lat: 0, lng: 0 },
-    { name: "Dartmouth Castle (On-Site #1)", lat: 50.34285, lng: -3.56585 },
-    { name: "Town Jetty / Harbour (On-Site #2)", lat: 50.35102, lng: -3.57852 },
-    { name: "Royal Naval College (On-Site #3)", lat: 50.35624, lng: -3.58284 },
-    { name: "Off-Site (Dartmouth Marina)", lat: 50.36050, lng: -3.58320 },
-    { name: "Off-Site (Totnes Road)", lat: 50.36110, lng: -3.61500 },
+    ...sites.map(site => ({
+      name: `${site.name} (On-Site Sim)`,
+      lat: site.lat,
+      lng: site.lng
+    })),
+    // Fallbacks if no sites are registered yet
+    ...(sites.length === 0 ? [
+      { name: "Dartmouth Castle (On-Site #1)", lat: 50.34285, lng: -3.56585 },
+      { name: "Town Jetty / Harbour (On-Site #2)", lat: 50.35102, lng: -3.57852 },
+      { name: "Royal Naval College (On-Site #3)", lat: 50.35624, lng: -3.58284 },
+    ] : []),
+    { name: "Off-Site (Totnes Road Sim)", lat: 50.36110, lng: -3.61500 },
   ];
 
   const handleValidate = async () => {
