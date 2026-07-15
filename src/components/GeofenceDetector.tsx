@@ -68,6 +68,15 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
     setValidationResult(null);
     setNearestSite(null);
 
+    // Load latest sites dynamically
+    let latestSites = sites;
+    try {
+      latestSites = await dbGetSites(uid);
+      setSites(latestSites);
+    } catch (err) {
+      console.warn("Failed to fetch latest sites for geofencing:", err);
+    }
+
     // 1. Get Coordinates (Simulated or Real GPS)
     let currentLat = 0;
     let currentLng = 0;
@@ -77,7 +86,7 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
       currentLng = simulatedCoords.lng;
       setCoords({ lat: currentLat, lng: currentLng });
       await dbAddAuditLog(uid, "LOCATION_SIMULATION_ACTIVE", `Using mock GPS coordinate profile: ${simulatedCoords.name}`);
-      evaluateGeofence(currentLat, currentLng);
+      evaluateGeofence(currentLat, currentLng, latestSites);
     } else {
       if (typeof window === "undefined" || !navigator.geolocation) {
         setErrorMsg("HTML5 Geolocation is not supported by this browser.");
@@ -91,7 +100,7 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
           currentLng = position.coords.longitude;
           setCoords({ lat: currentLat, lng: currentLng });
           await dbAddAuditLog(uid, "LOCATION_GPS_ACQUIRED", `Successfully fetched HTML5 GPS coordinates: (${currentLat.toFixed(5)}, ${currentLng.toFixed(5)})`);
-          evaluateGeofence(currentLat, currentLng);
+          evaluateGeofence(currentLat, currentLng, latestSites);
         },
         async (error) => {
           console.error(error);
@@ -108,8 +117,9 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
     }
   };
 
-  const evaluateGeofence = async (lat: number, lng: number) => {
-    if (sites.length === 0) {
+  const evaluateGeofence = async (lat: number, lng: number, latestSitesList?: Site[]) => {
+    const activeSites = latestSitesList || sites;
+    if (activeSites.length === 0) {
       setErrorMsg("No active sites loaded to validate against.");
       setLoading(false);
       return;
@@ -120,7 +130,7 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
     let matchedSite: Site | null = null;
 
     // Find closest and matched site using synchronous loop
-    for (const site of sites) {
+    for (const site of activeSites) {
       const distance = getDistance(lat, lng, site.lat, site.lng);
       if (distance < minDistance) {
         minDistance = distance;
@@ -164,14 +174,23 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
         const shifts = await dbGetShifts(uid);
         const todayStr = new Date().toISOString().split("T")[0];
         
-        // Find active shift matching staffId, date.
-        // For global/merchant check-ins, we can validate ANY shift scheduled for today.
-        // For standard geofences, we prefer matching the exact site.
         let matchedShift = null;
-        if (matchedSite?.type === "global" || matchedSite?.type === "merchant") {
+        if (
+          matchedSite?.type === "global" || 
+          matchedSite?.type === "merchant" || 
+          (matchedSite?.type === "admin" && !matchedSite.associatedSiteId)
+        ) {
           matchedShift = shifts.find(
             s => s.staffId === selectedStaffId && 
             s.date === todayStr && 
+            !s.validated
+          );
+        } else if (matchedSite?.type === "admin" && matchedSite.associatedSiteId) {
+          const associatedSite = activeSites.find(s => s.id === matchedSite.associatedSiteId);
+          matchedShift = shifts.find(
+            s => s.staffId === selectedStaffId && 
+            s.date === todayStr && 
+            s.siteName === associatedSite?.name &&
             !s.validated
           );
         } else {
@@ -181,7 +200,6 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
             s.siteName === matchedSite?.name &&
             !s.validated
           );
-          // Fallback: if not found, check if there's any shift scheduled for today
           if (!matchedShift) {
             matchedShift = shifts.find(
               s => s.staffId === selectedStaffId && 
@@ -206,6 +224,9 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
           } else if (matchedSite?.type === "merchant") {
             logAction = "SHIFT_VALIDATED_VIA_MERCHANT";
             logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Merchant Location (${matchedSite.name}).`;
+          } else if (matchedSite?.type === "admin") {
+            logAction = "SHIFT_VALIDATED_VIA_ADMIN_AREA";
+            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Admin Area (${matchedSite.name}).`;
           }
           
           await dbAddAuditLog(uid, logAction, logDetails);

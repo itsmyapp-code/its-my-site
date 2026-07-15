@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { Map, Plus, Trash2, MapPin, ListOrdered, Calendar } from "lucide-react";
-import { dbGetSites, dbAddSite, dbDeleteSite, dbGetEvents, dbAddAuditLog, Site, ShiftEvent } from "@/lib/db";
+import { dbGetSites, dbAddSite, dbDeleteSite, dbGetEvents, dbAddAuditLog, Site, ShiftEvent, resolvePostcode, resolveWhat3WordsMock, dbUpdateSite } from "@/lib/db";
 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -69,10 +69,48 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
   const [siteLat, setSiteLat] = useState("");
   const [siteLng, setSiteLng] = useState("");
   const [siteRadius, setSiteRadius] = useState("100");
-  const [siteType, setSiteType] = useState<"geofence" | "merchant" | "global">("geofence");
+  const [siteType, setSiteType] = useState<"geofence" | "merchant" | "global" | "admin">("geofence");
   const [formMsg, setFormMsg] = useState("");
   
+  const [inputMethod, setInputMethod] = useState<"coords" | "w3w" | "postcode">("coords");
+  const [w3wInput, setW3wInput] = useState("");
+  const [postcodeInput, setPostcodeInput] = useState("");
+  const [associatedSiteId, setAssociatedSiteId] = useState("");
+  const [validationTimesStr, setValidationTimesStr] = useState("");
+  const [newTimeInputs, setNewTimeInputs] = useState<Record<string, string>>({});
+  
   const [mapLoaded, setMapLoaded] = useState(false);
+
+  const handleRemoveValidationTime = async (siteId: string, timeToRemove: string) => {
+    const site = sites.find(s => s.id === siteId);
+    if (!site) return;
+    const updatedTimes = (site.validationTimes || []).filter(t => t !== timeToRemove);
+    try {
+      await dbUpdateSite(uid, siteId, { validationTimes: updatedTimes });
+      await dbAddAuditLog(uid, "VALIDATION_SCHEDULE_UPDATED", `Removed checkpoint ${timeToRemove} from site ${site.name}`);
+      loadData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddValidationTimeDirect = async (siteId: string) => {
+    const newTime = newTimeInputs[siteId]?.trim();
+    if (!newTime || !/^\d{2}:\d{2}$/.test(newTime)) return;
+    const site = sites.find(s => s.id === siteId);
+    if (!site) return;
+    const currentTimes = site.validationTimes || [];
+    if (currentTimes.includes(newTime)) return;
+    const updatedTimes = [...currentTimes, newTime].sort();
+    try {
+      await dbUpdateSite(uid, siteId, { validationTimes: updatedTimes });
+      await dbAddAuditLog(uid, "VALIDATION_SCHEDULE_UPDATED", `Added checkpoint ${newTime} to site ${site.name}`);
+      setNewTimeInputs(prev => ({ ...prev, [siteId]: "" }));
+      loadData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   // Load sites and events from DB
   const loadData = async () => {
@@ -231,19 +269,46 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
   // Form handlers
   const handleAddSite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!siteName || !siteLat || !siteLng || !siteRadius) {
+    if (!siteName || !siteRadius) {
       setFormMsg("Please complete all inputs.");
       return;
     }
 
-    const latNum = parseFloat(siteLat);
-    const lngNum = parseFloat(siteLng);
-    const radiusNum = parseInt(siteRadius);
+    let latNum = parseFloat(siteLat);
+    let lngNum = parseFloat(siteLng);
 
-    if (isNaN(latNum) || isNaN(lngNum) || isNaN(radiusNum)) {
-      setFormMsg("Latitude, longitude and radius must be numbers.");
+    if (inputMethod === "w3w") {
+      if (!w3wInput) {
+        setFormMsg("Please enter a what3words address.");
+        return;
+      }
+      const coords = resolveWhat3WordsMock(w3wInput);
+      latNum = coords.lat;
+      lngNum = coords.lng;
+    } else if (inputMethod === "postcode") {
+      if (!postcodeInput) {
+        setFormMsg("Please enter a postcode.");
+        return;
+      }
+      setFormMsg("Resolving postcode...");
+      const coords = await resolvePostcode(postcodeInput);
+      if (!coords) {
+        setFormMsg("Could not resolve postcode. Check format.");
+        return;
+      }
+      latNum = coords.lat;
+      lngNum = coords.lng;
+    }
+
+    if (isNaN(latNum) || isNaN(lngNum) || isNaN(parseInt(siteRadius))) {
+      setFormMsg("Latitude, longitude and radius must be valid.");
       return;
     }
+
+    const radiusNum = parseInt(siteRadius);
+    const timesArray = validationTimesStr
+      ? validationTimesStr.split(",").map(t => t.trim()).filter(t => /^\d{2}:\d{2}$/.test(t))
+      : [];
 
     const siteData = {
       name: siteName,
@@ -251,6 +316,10 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       lng: lngNum,
       radius: radiusNum,
       type: siteType,
+      validationTimes: timesArray,
+      associatedSiteId: siteType === "admin" && associatedSiteId ? associatedSiteId : undefined,
+      what3words: inputMethod === "w3w" ? w3wInput : undefined,
+      postcode: inputMethod === "postcode" ? postcodeInput : undefined,
     };
 
     setFormMsg("Saving site...");
@@ -261,15 +330,18 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       setSiteLng("");
       setSiteRadius("100");
       setSiteType("geofence");
+      setW3wInput("");
+      setPostcodeInput("");
+      setAssociatedSiteId("");
+      setValidationTimesStr("");
       setFormMsg("Site registered successfully!");
       
       await dbAddAuditLog(
         uid, 
         "GEOFENCE_SITE_CREATED", 
-        `Admin created new geofence site: ${siteData.name} at (${siteData.lat}, ${siteData.lng}) with radius ${siteData.radius}m.`
+        `Admin created new geofence site: ${siteData.name} at (${siteData.lat.toFixed(5)}, ${siteData.lng.toFixed(5)}) with radius ${siteData.radius}m.`
       );
 
-      // Reload
       loadData();
     } catch (err) {
       console.error(err);
@@ -338,58 +410,142 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
                 required
               />
             </div>
-            
+
+            <div>
+              <label className="text-xs text-slate-450 font-bold uppercase tracking-wider block mb-1">Address Input Method</label>
+              <div className="flex gap-2">
+                {["coords", "w3w", "postcode"].map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => setInputMethod(method as any)}
+                    className={`flex-1 h-8 text-[11px] font-bold uppercase tracking-wider border rounded-none transition cursor-pointer ${
+                      inputMethod === method
+                        ? "bg-brand-blue border-brand-blue text-slate-955"
+                        : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {method === "coords" ? "Lat/Lng" : method === "w3w" ? "what3words" : "Postcode"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {inputMethod === "coords" && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Latitude</label>
+                  <input
+                    type="text"
+                    placeholder="50.3428"
+                    value={siteLat}
+                    onChange={(e) => setSiteLat(e.target.value)}
+                    className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Longitude</label>
+                  <input
+                    type="text"
+                    placeholder="-3.5658"
+                    value={siteLng}
+                    onChange={(e) => setSiteLng(e.target.value)}
+                    className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                    required
+                  />
+                </div>
+              </div>
+            )}
+
+            {inputMethod === "w3w" && (
+              <div>
+                <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">what3words Address</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 text-brand-yellow font-extrabold text-xs">///</span>
+                  <input
+                    type="text"
+                    placeholder="filled.count.soap"
+                    value={w3wInput.replace(/^\/{3}/, "")}
+                    onChange={(e) => setW3wInput(e.target.value)}
+                    className="w-full h-9 pl-9 pr-3 bg-slate-955 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                    required
+                  />
+                </div>
+              </div>
+            )}
+
+            {inputMethod === "postcode" && (
+              <div>
+                <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">UK Postcode</label>
+                <input
+                  type="text"
+                  placeholder="e.g. TQ6 9JN"
+                  value={postcodeInput}
+                  onChange={(e) => setPostcodeInput(e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                  required
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-slate-450 font-bold uppercase tracking-wider block mb-1">Latitude</label>
-                <input
-                  type="text"
-                  placeholder="50.3428"
-                  value={siteLat}
-                  onChange={(e) => setSiteLat(e.target.value)}
-                  className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Location Type</label>
+                <select
+                  value={siteType}
+                  onChange={(e) => setSiteType(e.target.value as any)}
+                  className="w-full h-9 px-2 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
                   required
-                />
+                >
+                  <option value="geofence">Rota Geofence Area</option>
+                  <option value="merchant">Local Merchant / Supplier</option>
+                  <option value="global">Global Location (e.g. Head Office)</option>
+                  <option value="admin">Admin Area (e.g. Manager Office)</option>
+                </select>
               </div>
+
               <div>
-                <label className="text-xs text-slate-450 font-bold uppercase tracking-wider block mb-1">Longitude</label>
+                <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Boundary Radius (m)</label>
                 <input
-                  type="text"
-                  placeholder="-3.5658"
-                  value={siteLng}
-                  onChange={(e) => setSiteLng(e.target.value)}
+                  type="number"
+                  placeholder="100"
+                  value={siteRadius}
+                  onChange={(e) => setSiteRadius(e.target.value)}
                   className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                  min="10"
+                  max="5000"
                   required
                 />
               </div>
             </div>
 
-            <div>
-              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Boundary Radius (meters)</label>
-              <input
-                type="number"
-                placeholder="100"
-                value={siteRadius}
-                onChange={(e) => setSiteRadius(e.target.value)}
-                className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm mb-3"
-                min="10"
-                max="5000"
-                required
-              />
-            </div>
+            {siteType === "admin" && (
+              <div>
+                <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Associated Rota Site</label>
+                <select
+                  value={associatedSiteId}
+                  onChange={(e) => setAssociatedSiteId(e.target.value)}
+                  className="w-full h-9 px-2 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                  required
+                >
+                  <option value="">Global / All Sites</option>
+                  {sites.filter(s => s.type !== "admin").map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
-              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Location Type</label>
-              <select
-                value={siteType}
-                onChange={(e) => setSiteType(e.target.value as any)}
-                className="w-full h-9 px-2 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
-                required
-              >
-                <option value="geofence">Rota Geofence Area</option>
-                <option value="merchant">Local Merchant / Supplier</option>
-                <option value="global">Global Location (e.g. Head Office)</option>
-              </select>
+              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Validation Times (Comma-separated)</label>
+              <input
+                type="text"
+                placeholder="e.g. 10:00, 14:00, 17:30"
+                value={validationTimesStr}
+                onChange={(e) => setValidationTimesStr(e.target.value)}
+                className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+              />
             </div>
 
             <button
@@ -405,34 +561,84 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
           {/* Site List */}
           <div className="space-y-2 pt-3 border-t border-slate-800">
             <span className="text-xs text-slate-450 font-bold uppercase tracking-wider block">Active Geofenced Zones ({sites.length})</span>
-            <div className="max-h-40 overflow-y-auto space-y-2 divide-y divide-slate-800 pr-1">
+            <div className="max-h-52 overflow-y-auto space-y-3.5 divide-y divide-slate-800 pr-1">
               {sites.map((site) => {
                 const badgeColor = site.type === "global" ? "bg-purple-950/70 text-purple-400 border-purple-800/60" :
                                    site.type === "merchant" ? "bg-amber-950/70 text-brand-yellow border-amber-800/60" :
+                                   site.type === "admin" ? "bg-emerald-950/70 text-emerald-400 border-emerald-800/60" :
                                    "bg-blue-950/70 text-brand-blue border-blue-800/60";
                 const typeLabel = site.type === "global" ? "Global" :
                                   site.type === "merchant" ? "Merchant" :
+                                  site.type === "admin" ? "Admin" :
                                   "Geofence";
                 return (
-                  <div key={site.id} className="flex justify-between items-center py-2 text-sm">
-                    <div className="truncate pr-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-100">{site.name}</span>
-                        <span className={`px-1.5 py-0.5 text-[9px] font-extrabold border rounded-none uppercase leading-none ${badgeColor}`}>
-                          {typeLabel}
+                  <div key={site.id} className="pt-2 text-sm space-y-1.5">
+                    <div className="flex justify-between items-start">
+                      <div className="truncate pr-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-100">{site.name}</span>
+                          <span className={`px-1.5 py-0.5 text-[9px] font-extrabold border rounded-none uppercase leading-none ${badgeColor}`}>
+                            {typeLabel}
+                          </span>
+                        </div>
+                        <span className="text-slate-500 font-semibold block text-xs mt-0.5">
+                          Radius: {site.radius}m | ({site.lat.toFixed(4)}, {site.lng.toFixed(4)})
                         </span>
+                        {site.type === "admin" && (
+                          <span className="text-[10px] text-slate-400 font-semibold block mt-0.5">
+                            Linked to: {site.associatedSiteId ? (sites.find(s => s.id === site.associatedSiteId)?.name || "Unknown Site") : "Global / All Sites"}
+                          </span>
+                        )}
                       </div>
-                      <span className="text-slate-500 font-semibold block text-xs mt-0.5">
-                        Radius: {site.radius}m | ({site.lat.toFixed(4)}, {site.lng.toFixed(4)})
-                      </span>
+                      <button
+                        onClick={() => handleDeleteSite(site.id, site.name)}
+                        className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
+                        title="Delete site"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleDeleteSite(site.id, site.name)}
-                      className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
-                      title="Delete site"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+
+                    {/* Site validation times manager */}
+                    <div className="pl-2 border-l border-slate-800 space-y-1">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Checkpoints:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(site.validationTimes || []).map((time) => (
+                          <span key={time} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-950 border border-slate-850 text-[10px] font-bold text-slate-400">
+                            <span>{time}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveValidationTime(site.id, time)}
+                              className="text-slate-600 hover:text-brand-red font-bold text-xs"
+                              title="Remove checkpoint"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                        {(site.validationTimes || []).length === 0 && (
+                          <span className="text-[10px] text-slate-650 italic">None configured</span>
+                        )}
+                      </div>
+                      
+                      {/* Add validation time input */}
+                      <div className="flex gap-1 items-center pt-1">
+                        <input
+                          type="text"
+                          placeholder="HH:MM"
+                          value={newTimeInputs[site.id] || ""}
+                          onChange={(e) => setNewTimeInputs(prev => ({ ...prev, [site.id]: e.target.value }))}
+                          className="h-6 w-14 px-1 bg-slate-950 border border-slate-850 text-slate-300 outline-none text-[10px] rounded-none font-bold text-center"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddValidationTimeDirect(site.id)}
+                          className="h-6 px-2 bg-slate-950 hover:bg-slate-850 border border-slate-805 text-slate-400 hover:text-slate-200 text-[10px] font-bold uppercase tracking-wider rounded-none transition"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 );
               })}

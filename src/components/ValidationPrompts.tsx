@@ -6,12 +6,13 @@ import { dbAddAuditLog, dbAddEvent } from "@/lib/db";
 
 interface ValidationPromptsProps {
   uid: string;
+  role: "admin" | "worker";
   onOpenValidation: () => void;
   activePrompt: boolean;
   setActivePrompt: (val: boolean) => void;
 }
 
-export function ValidationPrompts({ uid, onOpenValidation, activePrompt, setActivePrompt }: ValidationPromptsProps) {
+export function ValidationPrompts({ uid, role, onOpenValidation, activePrompt, setActivePrompt }: ValidationPromptsProps) {
   const [scheduledTimes, setScheduledTimes] = useState<string[]>(["10:00", "14:00", "17:30"]);
   const [newTime, setNewTime] = useState("");
   const [timerMsg, setTimerMsg] = useState("");
@@ -107,6 +108,39 @@ export function ValidationPrompts({ uid, onOpenValidation, activePrompt, setActi
     setActivePrompt(false);
     await dbAddAuditLog(uid, "VALIDATION_PROMPT_DISMISSED", "User dismissed/deferred active validation prompt.");
   };
+
+  if (role === "worker") {
+    if (!activePrompt) return null;
+    return (
+      <div className="p-4 bg-amber-955/80 border-2 border-brand-yellow text-slate-100 space-y-3.5">
+        <div className="flex items-center gap-2 text-brand-yellow font-bold text-sm">
+          <BellRing className="w-5 h-5 text-brand-yellow animate-bounce" />
+          <span>ACTION REQUIRED: SHIFT VALIDATION PROMPT</span>
+        </div>
+        <p className="text-sm leading-relaxed text-slate-200 font-semibold">
+          Under UK GDPR guidelines, we do not monitor your position continuously. 
+          Please manually verify you are on-site now.
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={() => {
+              setActivePrompt(false);
+              onOpenValidation();
+            }}
+            className="flex-1 h-10 bg-brand-yellow hover:bg-amber-500 text-slate-950 font-bold uppercase tracking-wider text-center cursor-pointer transition flex items-center justify-center rounded-none text-sm"
+          >
+            Verify Location
+          </button>
+          <button
+            onClick={handleDismissPrompt}
+            className="px-4 h-10 border border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200 uppercase font-bold text-xs cursor-pointer transition rounded-none"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-slate-900 border border-slate-800 p-6 font-mono text-sm space-y-5">

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { LogOut, Clock, Check, HelpCircle } from "lucide-react";
-import { dbAddEvent, dbAddAuditLog, validateWhat3Words, ShiftEvent } from "@/lib/db";
+import { dbAddEvent, dbAddAuditLog, validateWhat3Words, ShiftEvent, resolvePostcode, resolveWhat3WordsMock } from "@/lib/db";
 
 interface OffSiteModuleProps {
   uid: string;
@@ -25,6 +25,10 @@ const MOCK_W3W_SUGGESTIONS = [
 
 export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selectedStaffName }: OffSiteModuleProps) {
   const [w3wInput, setW3wInput] = useState("");
+  const [inputMethod, setInputMethod] = useState<"w3w" | "postcode" | "coords">("w3w");
+  const [postcodeInput, setPostcodeInput] = useState("");
+  const [latInput, setLatInput] = useState("");
+  const [lngInput, setLngInput] = useState("");
   const [returnTime, setReturnTime] = useState("");
   const [suggestions, setSuggestions] = useState<{ w3w: string; location: string }[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -71,18 +75,6 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
     setSuccessMsg(null);
     setLoading(true);
 
-    let cleanW3W = w3wInput.trim();
-    if (cleanW3W && !cleanW3W.startsWith("///")) {
-      cleanW3W = "///" + cleanW3W;
-    }
-
-    // Validate what3words pattern
-    if (!validateWhat3Words(cleanW3W)) {
-      setValidationError("Invalid what3words address. Format must be ///word.word.word");
-      setLoading(false);
-      return;
-    }
-
     if (!returnTime) {
       setValidationError("Please select or enter an expected return time.");
       setLoading(false);
@@ -90,24 +82,63 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
     }
 
     try {
-      let lat = 50.3510; 
+      let lat = 50.3510;
       let lng = -3.5785;
+      let cleanW3W = undefined;
+      let postcodeVal = undefined;
+      let locationDescription = "";
 
-      if (typeof window !== "undefined" && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            lat = pos.coords.latitude;
-            lng = pos.coords.longitude;
-            saveDeparture(cleanW3W, returnTime, lat, lng);
-          },
-          () => {
-            saveDeparture(cleanW3W, returnTime, lat, lng);
-          },
-          { timeout: 3000 }
-        );
+      if (inputMethod === "w3w") {
+        let w3wClean = w3wInput.trim();
+        if (w3wClean && !w3wClean.startsWith("///")) {
+          w3wClean = "///" + w3wClean;
+        }
+        if (!validateWhat3Words(w3wClean)) {
+          setValidationError("Invalid what3words address. Format must be ///word.word.word");
+          setLoading(false);
+          return;
+        }
+        cleanW3W = w3wClean;
+        const coords = resolveWhat3WordsMock(w3wClean);
+        lat = coords.lat;
+        lng = coords.lng;
+        const matchedSuggestion = MOCK_W3W_SUGGESTIONS.find(s => s.w3w === w3wClean);
+        locationDescription = matchedSuggestion
+          ? `Transit to ${matchedSuggestion.location} (${w3wClean})`
+          : `Transit to ${w3wClean}`;
+      } else if (inputMethod === "postcode") {
+        const pcClean = postcodeInput.trim().toUpperCase();
+        if (!pcClean) {
+          setValidationError("Please enter a postcode.");
+          setLoading(false);
+          return;
+        }
+        setValidationError("Resolving postcode...");
+        const coords = await resolvePostcode(pcClean);
+        if (!coords) {
+          setValidationError("Could not resolve postcode. Check format.");
+          setLoading(false);
+          return;
+        }
+        setValidationError(null);
+        lat = coords.lat;
+        lng = coords.lng;
+        postcodeVal = pcClean;
+        locationDescription = `Transit to Postcode ${pcClean}`;
       } else {
-        saveDeparture(cleanW3W, returnTime, lat, lng);
+        const latNum = parseFloat(latInput);
+        const lngNum = parseFloat(lngInput);
+        if (isNaN(latNum) || isNaN(lngNum)) {
+          setValidationError("Coordinates must be valid numbers.");
+          setLoading(false);
+          return;
+        }
+        lat = latNum;
+        lng = lngNum;
+        locationDescription = `Transit to Coordinates (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
       }
+
+      await saveDeparture(cleanW3W, postcodeVal, returnTime, lat, lng, locationDescription);
     } catch (err) {
       console.error(err);
       setValidationError("Failed to record transit. Please try again.");
@@ -115,12 +146,14 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
     }
   };
 
-  const saveDeparture = async (w3w: string, time: string, lat: number, lng: number) => {
-    const matchedSuggestion = MOCK_W3W_SUGGESTIONS.find(s => s.w3w === w3w);
-    const locationDescription = matchedSuggestion 
-      ? `Transit to ${matchedSuggestion.location} (${w3w})` 
-      : `Transit to ${w3w}`;
-
+  const saveDeparture = async (
+    w3w: string | undefined, 
+    postcode: string | undefined, 
+    time: string, 
+    lat: number, 
+    lng: number, 
+    locationDescription: string
+  ) => {
     const eventData = {
       type: "depart" as const,
       timestamp: new Date().toISOString(),
@@ -128,6 +161,7 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
       lat,
       lng,
       what3words: w3w,
+      postcode: postcode,
       expectedReturn: time,
       staffId: selectedStaffId,
       staffName: selectedStaffName
@@ -139,13 +173,16 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
     await dbAddAuditLog(
       uid, 
       "SHIFT_OFFSITE_DEPARTURE", 
-      `Worker registered driving off-site to ${w3w} (${matchedSuggestion?.location || 'custom'}). Expected return: ${time}.`
+      `Worker registered driving off-site to ${locationDescription}. Expected return: ${time}.`
     );
 
     onOffSiteSuccess(fullEvent);
     setW3wInput("");
+    setPostcodeInput("");
+    setLatInput("");
+    setLngInput("");
     setReturnTime("");
-    setSuccessMsg(`Departure logged! Transit to destination (${w3w}) is active. Expected return at ${time}.`);
+    setSuccessMsg(`Departure logged! ${locationDescription} is active. Expected return at ${time}.`);
     setLoading(false);
     
     setTimeout(() => setSuccessMsg(null), 6000);
@@ -181,41 +218,109 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
 
       <form onSubmit={handleSubmit} className="space-y-4 relative">
         
-        {/* Destination what3words input */}
-        <div className="space-y-1.5 relative" ref={dropdownRef}>
-          <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block">
-            Destination what3words
-          </label>
-          <div className="relative">
-            <span className="absolute left-3 top-2.5 text-brand-yellow font-extrabold text-sm">///</span>
+        <div>
+          <label className="text-xs text-slate-450 font-bold uppercase tracking-wider block mb-1">Destination Address Type</label>
+          <div className="flex gap-2">
+            {["w3w", "postcode", "coords"].map((method) => (
+              <button
+                key={method}
+                type="button"
+                onClick={() => setInputMethod(method as any)}
+                className={`flex-1 h-8 text-[11px] font-bold uppercase tracking-wider border rounded-none transition cursor-pointer ${
+                  inputMethod === method
+                    ? "bg-brand-yellow border-brand-yellow text-slate-955"
+                    : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {method === "w3w" ? "what3words" : method === "postcode" ? "Postcode" : "Lat/Lng"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Conditional inputs */}
+        {inputMethod === "w3w" && (
+          <div className="space-y-1.5 relative" ref={dropdownRef}>
+            <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block">
+              Destination what3words
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-2.5 text-brand-yellow font-extrabold text-sm">///</span>
+              <input
+                type="text"
+                value={w3wInput.replace(/^\/{3}/, "")} 
+                onChange={(e) => setW3wInput(e.target.value)}
+                placeholder="word.word.word"
+                className="w-full h-10 pl-10 pr-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue font-bold rounded-none text-sm"
+                disabled={loading}
+                required
+              />
+            </div>
+
+            {/* Autocomplete Dropdown */}
+            {suggestions.length > 0 && (
+              <div className="absolute left-0 right-0 z-50 mt-1 bg-slate-950 border border-slate-800 max-h-48 overflow-y-auto rounded-none shadow-xl divide-y divide-slate-900">
+                {suggestions.map((item) => (
+                  <button
+                    key={item.w3w}
+                    type="button"
+                    onClick={() => handleSelectSuggestion(item.w3w)}
+                    className="w-full p-2.5 text-left hover:bg-slate-900 text-xs flex justify-between items-center cursor-pointer transition text-slate-300 font-medium"
+                  >
+                    <span className="font-bold text-brand-yellow">{item.w3w}</span>
+                    <span className="text-slate-500 font-semibold truncate ml-2 max-w-[220px]">{item.location}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {inputMethod === "postcode" && (
+          <div className="space-y-1.5">
+            <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block">
+              Destination UK Postcode
+            </label>
             <input
               type="text"
-              value={w3wInput.replace(/^\/{3}/, "")} 
-              onChange={(e) => setW3wInput(e.target.value)}
-              placeholder="word.word.word"
-              className="w-full h-10 pl-10 pr-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue font-bold rounded-none text-sm"
+              placeholder="e.g. TQ6 9JN"
+              value={postcodeInput}
+              onChange={(e) => setPostcodeInput(e.target.value)}
+              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue font-bold rounded-none text-sm"
               disabled={loading}
               required
             />
           </div>
+        )}
 
-          {/* Autocomplete Dropdown */}
-          {suggestions.length > 0 && (
-            <div className="absolute left-0 right-0 z-50 mt-1 bg-slate-950 border border-slate-800 max-h-48 overflow-y-auto rounded-none shadow-xl divide-y divide-slate-900">
-              {suggestions.map((item) => (
-                <button
-                  key={item.w3w}
-                  type="button"
-                  onClick={() => handleSelectSuggestion(item.w3w)}
-                  className="w-full p-2.5 text-left hover:bg-slate-900 text-xs flex justify-between items-center cursor-pointer transition text-slate-300 font-medium"
-                >
-                  <span className="font-bold text-brand-yellow">{item.w3w}</span>
-                  <span className="text-slate-500 font-semibold truncate ml-2 max-w-[220px]">{item.location}</span>
-                </button>
-              ))}
+        {inputMethod === "coords" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block mb-1">Latitude</label>
+              <input
+                type="text"
+                placeholder="50.3428"
+                value={latInput}
+                onChange={(e) => setLatInput(e.target.value)}
+                className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue font-bold rounded-none text-sm"
+                disabled={loading}
+                required
+              />
             </div>
-          )}
-        </div>
+            <div>
+              <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block mb-1">Longitude</label>
+              <input
+                type="text"
+                placeholder="-3.5658"
+                value={lngInput}
+                onChange={(e) => setLngInput(e.target.value)}
+                className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue font-bold rounded-none text-sm"
+                disabled={loading}
+                required
+              />
+            </div>
+          </div>
+        )}
 
         {/* Expected return time */}
         <div className="space-y-1.5">
@@ -245,14 +350,14 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
             <button
               type="button"
               onClick={() => setQuickTime(60)}
-              className="px-2 py-1.5 bg-slate-950 hover:bg-slate-855 border border-slate-855 text-slate-400 hover:text-slate-250 cursor-pointer text-xs rounded-none grow font-bold"
+              className="px-2 py-1.5 bg-slate-955 hover:bg-slate-855 border border-slate-855 text-slate-400 hover:text-slate-250 cursor-pointer text-xs rounded-none grow font-bold"
             >
               +1h
             </button>
             <button
               type="button"
               onClick={() => setQuickTime(120)}
-              className="px-2 py-1.5 bg-slate-950 hover:bg-slate-855 border border-slate-855 text-slate-400 hover:text-slate-250 cursor-pointer text-xs rounded-none grow font-bold"
+              className="px-2 py-1.5 bg-slate-955 hover:bg-slate-855 border border-slate-855 text-slate-400 hover:text-slate-250 cursor-pointer text-xs rounded-none grow font-bold"
             >
               +2h
             </button>
@@ -268,7 +373,7 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
         <button
           type="submit"
           disabled={loading}
-          className="w-full h-11 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-200 font-extrabold uppercase tracking-wider text-center cursor-pointer transition flex items-center justify-center gap-2 rounded-none disabled:opacity-50 text-sm"
+          className="w-full h-11 bg-slate-955 hover:bg-slate-900 border border-slate-800 text-slate-200 font-extrabold uppercase tracking-wider text-center cursor-pointer transition flex items-center justify-center gap-2 rounded-none disabled:opacity-50 text-sm"
         >
           <Clock className="w-4 h-4" />
           <span>Record Transit Departure</span>
@@ -278,7 +383,7 @@ export function OffSiteModule({ uid, onOffSiteSuccess, selectedStaffId, selected
       
       <div className="text-xs text-slate-500 leading-normal flex items-start gap-2 pt-1 border-t border-slate-850">
         <HelpCircle className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
-        <span>Use three-word codes to report targets (e.g. ///filled.count.soap for Dartmouth Castle).</span>
+        <span>Select your method and enter target details (e.g. what3words, UK postcode, or GPS coordinates).</span>
       </div>
 
     </div>

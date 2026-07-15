@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if the request is from a staff member mapped to this admin
+    function isStaffOf(adminUid) {
+      return request.auth != null 
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/staff_mappings/$(request.auth.token.email.lower()))
+        && get(/databases/$(database)/documents/staff_mappings/$(request.auth.token.email.lower())).data.adminUid == adminUid;
+    }
+
+    // Users can read/write their own UID-scoped data, and mapped staff can read/write
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && (request.auth.uid == uid || isStaffOf(uid));
+    }
+
+    // Authenticated users can read/write staff mappings
+    match /staff_mappings/{email} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

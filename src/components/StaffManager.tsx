@@ -478,47 +478,11 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
 
       </div>
 
-      {/* 2. SHIFTS LIST & PAYROLL REPORT (Col: 7) */}
+      {/* 2. SHIFTS LIST & ROTA (Col: 7) */}
       <div className="xl:col-span-7 space-y-6">
         
-        {/* Hours & Payroll Bento Card */}
-        <div className="bg-slate-900 border border-slate-800 p-5 space-y-4 relative overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-brand-blue" />
-          
-          <h3 className="text-base font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2 border-b border-slate-850 pb-2.5">
-            <DollarSign className="w-5 h-5 text-brand-blue" />
-            <span>Shift Hours & Estimated Payroll Report</span>
-          </h3>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-950 p-4 border border-slate-850 text-sm">
-            <div className="space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Scheduled Hours</span>
-              <div className="text-2xl font-extrabold text-slate-200">{totalScheduledHours.toFixed(1)} hrs</div>
-            </div>
-            <div className="space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Validated Hours</span>
-              <div className="text-2xl font-extrabold text-brand-blue">{totalValidatedHours.toFixed(1)} hrs</div>
-            </div>
-            <div className="space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Total Estimated Pay</span>
-              <div className="text-2xl font-extrabold text-brand-yellow">£{totalPayroll.toFixed(2)}</div>
-            </div>
-          </div>
-
-          <div className="space-y-2 text-sm leading-normal">
-            <div className="flex justify-between border-b border-slate-850 pb-1.5 text-slate-400">
-              <span>Verified / Validated Payroll (Geofenced Approved)</span>
-              <span className="font-bold text-emerald-400">£{payrollDetails.validatedPay.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-850 pb-1.5 text-slate-400">
-              <span>Unverified / Pending Payroll (Off-Site/Unlogged)</span>
-              <span className="font-bold text-rose-400">£{payrollDetails.pendingPay.toFixed(2)}</span>
-            </div>
-          </div>
-        </div>
-
         {/* Scheduled Shifts Rota List */}
-        <div className="bg-slate-900 border border-slate-800 p-5 space-y-4 flex flex-col h-[340px] xl:h-[352px]">
+        <div className="bg-slate-900 border border-slate-800 p-5 space-y-4 flex flex-col h-[520px] xl:h-[530px]">
           <h3 className="text-base font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2 border-b border-slate-850 pb-2.5">
             <Clock className="w-5 h-5 text-brand-yellow" />
             <span>Scheduled Shifts Rota</span>

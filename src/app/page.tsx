@@ -17,7 +17,8 @@ import {
   Loader2,
   LogOut,
   Eye,
-  EyeOff
+  EyeOff,
+  PoundSterling
 } from "lucide-react";
 
 // Components
@@ -78,6 +79,9 @@ export default function Home() {
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [workerShifts, setWorkerShifts] = useState<Shift[]>([]);
 
+  const [allAdminShifts, setAllAdminShifts] = useState<Shift[]>([]);
+  const [allAdminStaff, setAllAdminStaff] = useState<Staff[]>([]);
+
   // Fetch metrics and audit logs
   const fetchDashboardData = async () => {
     try {
@@ -101,6 +105,7 @@ export default function Home() {
       // Load staff list for worker view simulation
       const staffList = await dbGetStaff(uid);
       setStaffMembers(staffList);
+      setAllAdminStaff(staffList);
       
       // If worker is logged in, use mapped staff profile
       if (role === "worker" && staffId) {
@@ -111,6 +116,7 @@ export default function Home() {
 
       // Load shifts
       const allShifts = await dbGetShifts(uid);
+      setAllAdminShifts(allShifts);
       if (role === "worker" && staffId) {
         setWorkerShifts(allShifts.filter(s => s.staffId === staffId));
       } else if (selectedStaffId) {
@@ -126,6 +132,25 @@ export default function Home() {
   // Listen to Firebase Auth state
   useEffect(() => {
     if (!authInstance) {
+      const cached = typeof window !== "undefined" ? localStorage.getItem("itsmysite_mock_user") : null;
+      if (cached) {
+        setUser({ email: cached });
+        if (cached === "admin@example.com" || cached.includes("admin")) {
+          setRole("admin");
+          setUid("admin-worker-hybrid-101");
+          setStaffId(null);
+        } else {
+          setRole("worker");
+          setUid("admin-worker-hybrid-101");
+          dbGetStaff("admin-worker-hybrid-101").then((staffList) => {
+            const matched = staffList.find(s => s.email && s.email.toLowerCase() === cached.toLowerCase());
+            if (matched) {
+              setStaffId(matched.id);
+              setSelectedStaffId(matched.id);
+            }
+          });
+        }
+      }
       setLoadingAuth(false);
       return;
     }
@@ -187,6 +212,76 @@ export default function Home() {
     setRefreshTrigger(prev => prev + 1);
   };
 
+  const playChime = () => {
+    if (typeof window === "undefined") return;
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc1.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12);
+      gain1.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start();
+      osc1.stop(ctx.currentTime + 0.35);
+    } catch (e) {
+      console.warn("Audio chime blocked by browser autoplay policy:", e);
+    }
+  };
+
+  // Background monitoring for site validation checkpoints
+  useEffect(() => {
+    if (role !== "worker") return;
+
+    const interval = setInterval(async () => {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const timeStr = `${hh}:${mm}`;
+
+      const todayStr = now.toISOString().split("T")[0];
+      const todaysShifts = workerShifts.filter((s) => s.date === todayStr);
+      if (todaysShifts.length === 0) return;
+
+      const allSites = await dbGetSites(uid);
+      let shouldPrompt = false;
+      let matchedSiteName = "";
+
+      for (const shift of todaysShifts) {
+        const site = allSites.find((s) => s.id === shift.siteId);
+        if (site && site.validationTimes && site.validationTimes.includes(timeStr)) {
+          shouldPrompt = true;
+          matchedSiteName = site.name;
+          break;
+        }
+      }
+
+      if (shouldPrompt && !activePrompt) {
+        setActivePrompt(true);
+        playChime();
+        if (typeof window !== "undefined" && "Notification" in window) {
+          if (Notification.permission === "granted") {
+            new Notification("itsmysite - Validation Required", {
+              body: `Are you on-site at ${matchedSiteName}? Active shift verification is scheduled now.`,
+              icon: "/favicon.ico",
+            });
+          } else if (Notification.permission !== "denied") {
+            Notification.requestPermission();
+          }
+        }
+        await dbAddAuditLog(uid, "VALIDATION_PROMPT_TRIGGERED", `Scheduled validation prompt triggered for ${timeStr} at site ${matchedSiteName}`);
+      }
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [role, workerShifts, activePrompt, uid]);
+
   const handleOffSiteSuccess = (event: ShiftEvent) => {
     setRefreshTrigger(prev => prev + 1);
   };
@@ -195,7 +290,7 @@ export default function Home() {
     setRefreshTrigger(prev => prev + 1);
   };
 
-  if (authInstance && !user) {
+  if (!user) {
     if (loadingAuth) {
       return (
         <div className="flex-1 flex flex-col items-center justify-center min-h-screen bg-slate-950 font-mono text-sm text-slate-400">
@@ -204,7 +299,32 @@ export default function Home() {
         </div>
       );
     }
-    return <LoginScreen />;
+    return (
+      <LoginScreen 
+        authInstance={authInstance} 
+        onMockLogin={async (email) => {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("itsmysite_mock_user", email);
+          }
+          setUser({ email });
+          if (email === "admin@example.com" || email.includes("admin")) {
+            setRole("admin");
+            setUid("admin-worker-hybrid-101");
+            setStaffId(null);
+          } else {
+            setRole("worker");
+            setUid("admin-worker-hybrid-101");
+            const staffList = await dbGetStaff("admin-worker-hybrid-101");
+            const matched = staffList.find(s => s.email && s.email.toLowerCase() === email.toLowerCase());
+            if (matched) {
+              setStaffId(matched.id);
+              setSelectedStaffId(matched.id);
+            }
+          }
+          await dbAddAuditLog("admin-worker-hybrid-101", "MOCK_LOGIN_SUCCESS", `Simulated sign in for ${email}`);
+        }}
+      />
+    );
   }
 
   return (
@@ -283,6 +403,14 @@ export default function Home() {
                 onClick={async () => {
                   if (authInstance) {
                     await signOut(authInstance);
+                  } else {
+                    if (typeof window !== "undefined") {
+                      localStorage.removeItem("itsmysite_mock_user");
+                    }
+                    setUser(null);
+                    setRole("admin");
+                    setUid("admin-worker-hybrid-101");
+                    setStaffId(null);
                   }
                 }}
                 className="h-10 px-4 border border-slate-850 bg-slate-955 hover:bg-slate-900 text-slate-200 hover:text-slate-100 flex items-center justify-center font-bold uppercase transition cursor-pointer text-xs gap-1.5"
@@ -338,7 +466,7 @@ export default function Home() {
                   adminSubView === "overview" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-350"
                 }`}
               >
-                Bento KPI Overview
+                Analytics Dashboard
               </button>
               <button 
                 onClick={() => setAdminSubView("logs")}
@@ -565,6 +693,7 @@ export default function Home() {
             {/* SCHEDULED PROMPT MONITOR */}
             <ValidationPrompts 
               uid={uid} 
+              role={role}
               onOpenValidation={() => {
                 const element = document.getElementById("geofence-detector-box");
                 if (element) element.scrollIntoView({ behavior: "smooth" });
@@ -684,7 +813,7 @@ export default function Home() {
                       : "bg-slate-955 hover:bg-slate-850 text-slate-400 border-slate-850"
                   }`}
                 >
-                  Bento KPI Overview
+                  Analytics Dashboard
                 </button>
 
                 <button
@@ -698,6 +827,59 @@ export default function Home() {
                   Audit Registers
                 </button>
               </nav>
+
+              {/* Shift Hours & Estimated Payroll Report (Admin Drawer) */}
+              {(() => {
+                const totalSchHours = allAdminShifts.reduce((sum, s) => sum + s.hours, 0);
+                const totalValHours = allAdminShifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
+                const payDetails = allAdminShifts.reduce((acc, shift) => {
+                  const staff = allAdminStaff.find(s => s.id === shift.staffId);
+                  const rate = staff ? staff.hourlyRate : 15.00;
+                  const pay = shift.hours * rate;
+                  if (shift.validated) {
+                    acc.validatedPay += pay;
+                  } else {
+                    acc.pendingPay += pay;
+                  }
+                  return acc;
+                }, { validatedPay: 0, pendingPay: 0 });
+                const totPayroll = payDetails.validatedPay + payDetails.pendingPay;
+
+                return (
+                  <div className="bg-slate-950 border border-slate-850 p-4 space-y-3 font-mono text-xs">
+                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2 text-slate-200">
+                      <PoundSterling className="w-4 h-4 text-brand-blue" />
+                      <span className="font-bold uppercase tracking-wider">Payroll Report (GBP)</span>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-slate-400">
+                        <span className="text-slate-500 font-bold uppercase">Scheduled</span>
+                        <span className="font-extrabold">{totalSchHours.toFixed(1)} hrs</span>
+                      </div>
+                      <div className="flex justify-between text-slate-400">
+                        <span className="text-slate-500 font-bold uppercase">Validated</span>
+                        <span className="text-brand-blue font-extrabold">{totalValHours.toFixed(1)} hrs</span>
+                      </div>
+                      <div className="flex justify-between border-t border-slate-850 pt-2 text-slate-350">
+                        <span className="text-slate-500 font-bold uppercase">Total Est. Pay</span>
+                        <span className="text-brand-yellow font-extrabold">£{totPayroll.toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 text-[11px] border-t border-slate-850 pt-2 text-slate-500 font-medium">
+                      <div className="flex justify-between">
+                        <span>Verified Pay:</span>
+                        <span className="text-emerald-500 font-bold">£{payDetails.validatedPay.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Pending Pay:</span>
+                        <span className="text-rose-400 font-bold">£{payDetails.pendingPay.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
             </div>
 
@@ -716,7 +898,12 @@ export default function Home() {
   );
 }
 
-function LoginScreen() {
+interface LoginScreenProps {
+  authInstance: any;
+  onMockLogin: (email: string) => void;
+}
+
+function LoginScreen({ authInstance, onMockLogin }: LoginScreenProps) {
   const [isRegister, setIsRegister] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState("");
@@ -734,6 +921,14 @@ function LoginScreen() {
     }
     setError("");
     setLoading(true);
+
+    if (!authInstance) {
+      setTimeout(() => {
+        setLoading(false);
+        onMockLogin(email.trim());
+      }, 400);
+      return;
+    }
 
     try {
       if (isRegister) {
@@ -947,6 +1142,13 @@ function LoginScreen() {
             >
               {isRegister ? "Already have an account? Sign In" : "Need to set up a new company? Register Admin"}
             </button>
+          </div>
+        )}
+
+        {/* Sandbox Warning Notice */}
+        {!authInstance && (
+          <div className="mt-4 p-3 bg-amber-955/40 border border-brand-yellow/30 text-brand-yellow text-[11px] leading-normal font-sans">
+            <strong>LocalStorage Sandbox Mode:</strong> Firebase config not found. You can enter any email to sign in: use <code>admin@example.com</code> for Admin view, or a registered worker email.
           </div>
         )}
 
