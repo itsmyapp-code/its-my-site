@@ -43,14 +43,17 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
   // Staff Form state
   const [staffName, setStaffName] = useState("");
   const [staffPhone, setStaffPhone] = useState("");
+  const [staffEmail, setStaffEmail] = useState("");
   const [staffRate, setStaffRate] = useState("15.00");
 
   // Shift Form state
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [selectedSiteId, setSelectedSiteId] = useState("");
   const [shiftDate, setShiftDate] = useState("");
+  const [shiftEndDate, setShiftEndDate] = useState("");
   const [shiftStartTime, setShiftStartTime] = useState("09:00");
   const [shiftHours, setShiftHours] = useState("8");
+  const [repeatDays, setRepeatDays] = useState<boolean[]>([true, true, true, true, true, false, false]);
 
   const loadData = async () => {
     try {
@@ -97,17 +100,19 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
       const newStaffId = await dbAddStaff(uid, {
         name: staffName,
         phone: staffPhone,
+        email: staffEmail.trim() || undefined,
         hourlyRate: rateNum
       });
 
       await dbAddAuditLog(
         uid,
         "STAFF_MEMBER_CREATED",
-        `Created staff profile for ${staffName} (${staffPhone}) at £${rateNum.toFixed(2)}/hr.`
+        `Created staff profile for ${staffName} (${staffPhone}${staffEmail.trim() ? `, Email: ${staffEmail}` : ""}) at £${rateNum.toFixed(2)}/hr.`
       );
 
       setStaffName("");
       setStaffPhone("");
+      setStaffEmail("");
       setStaffRate("15.00");
       setFormMsg("Staff member added successfully.");
       setTimeout(() => setFormMsg(""), 3000);
@@ -157,32 +162,59 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
     }
 
     try {
-      await dbAddShift(uid, {
-        staffId: selectedStaffId,
-        staffName: staff.name,
-        siteId: selectedSiteId,
-        siteName: site.name,
-        date: shiftDate,
-        startTime: shiftStartTime,
-        hours: hoursNum,
-        validated: false
-      });
+      const start = new Date(shiftDate);
+      const end = shiftEndDate ? new Date(shiftEndDate) : new Date(shiftDate);
+
+      if (end < start) {
+        setFormMsg("End date cannot be before start date.");
+        return;
+      }
+
+      let scheduledCount = 0;
+      // Loop daily from start date to end date
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        // Map: Sunday=0, Monday=1, ..., Saturday=6
+        // repeatDays array: Mon=0, Tue=1, ..., Sun=6
+        const dayOfWeek = d.getDay();
+        const repeatIdx = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+        if (repeatDays[repeatIdx]) {
+          const dateStr = d.toISOString().split("T")[0];
+          await dbAddShift(uid, {
+            staffId: selectedStaffId,
+            staffName: staff.name,
+            siteId: selectedSiteId,
+            siteName: site.name,
+            date: dateStr,
+            startTime: shiftStartTime,
+            hours: hoursNum,
+            validated: false
+          });
+          scheduledCount++;
+        }
+      }
+
+      if (scheduledCount === 0) {
+        setFormMsg("No shifts created. Check weekday selections.");
+        return;
+      }
 
       await dbAddAuditLog(
         uid,
-        "SHIFT_SCHEDULED",
-        `Scheduled ${hoursNum}hr shift for ${staff.name} at ${site.name} on ${shiftDate} starting at ${shiftStartTime}.`
+        "SHIFT_PATTERN_SCHEDULED",
+        `Scheduled ${scheduledCount} shifts of ${hoursNum}hr for ${staff.name} at ${site.name} between ${shiftDate} and ${shiftEndDate || shiftDate}.`
       );
 
       setShiftDate("");
-      setFormMsg("Shift scheduled successfully.");
+      setShiftEndDate("");
+      setFormMsg(`Successfully scheduled ${scheduledCount} shifts.`);
       setTimeout(() => setFormMsg(""), 3000);
 
       await loadData();
       onDataModified();
     } catch (err) {
       console.error(err);
-      setFormMsg("Error scheduling shift.");
+      setFormMsg("Error scheduling shifts.");
     }
   };
 
@@ -239,7 +271,6 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
             <Users className="w-5 h-5 text-brand-blue" />
             <span>Staff Directory</span>
           </h3>
-
           <form onSubmit={handleAddStaff} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -264,25 +295,34 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                   required
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Hourly Rate (£/hr)</label>
-              <div className="flex gap-2">
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Email Address</label>
                 <input
-                  type="text"
-                  placeholder="15.00"
-                  value={staffRate}
-                  onChange={(e) => setStaffRate(e.target.value)}
-                  className="h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none grow text-sm"
-                  required
+                  type="email"
+                  placeholder="e.g. john@example.com"
+                  value={staffEmail}
+                  onChange={(e) => setStaffEmail(e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-sm"
                 />
-                <button
-                  type="submit"
-                  className="h-9 px-5 bg-brand-blue hover:bg-blue-600 text-slate-950 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none shrink-0 text-sm"
-                >
-                  <Plus className="w-4 h-4 inline mr-1" /> Add Staff
-                </button>
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Hourly Rate (£/hr)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="15.00"
+                    value={staffRate}
+                    onChange={(e) => setStaffRate(e.target.value)}
+                    className="h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none grow text-sm"
+                    required
+                  />
+                  <button
+                    type="submit"
+                    className="h-9 px-5 bg-brand-blue hover:bg-blue-600 text-slate-950 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none shrink-0 text-sm"
+                  >
+                    <Plus className="w-4 h-4 inline mr-1" /> Add Staff
+                  </button>
+                </div>
               </div>
             </div>
           </form>
@@ -296,7 +336,7 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                   <div>
                     <span className="font-bold text-slate-100">{staff.name}</span>
                     <span className="text-slate-500 font-medium block text-xs">
-                      Phone: {staff.phone} | Rate: £{staff.hourlyRate.toFixed(2)}/hr
+                      Phone: {staff.phone} {staff.email ? `| Email: ${staff.email}` : ""} | Rate: £{staff.hourlyRate.toFixed(2)}/hr
                     </span>
                   </div>
                   <button
@@ -352,9 +392,9 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="sm:col-span-2">
-                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Shift Date</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Start Date</label>
                 <input
                   type="date"
                   value={shiftDate}
@@ -364,7 +404,40 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                 />
               </div>
               <div>
-                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Hours</label>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">End Date (Optional for bulk)</label>
+                <input
+                  type="date"
+                  value={shiftEndDate}
+                  onChange={(e) => setShiftEndDate(e.target.value)}
+                  className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-sm"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Repeat On Weekdays</label>
+              <div className="flex flex-wrap gap-2.5 pt-1.5 pb-1">
+                {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, idx) => (
+                  <label key={day} className="flex items-center gap-1 text-[11px] font-bold text-slate-350 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={repeatDays[idx]}
+                      onChange={(e) => {
+                        const updated = [...repeatDays];
+                        updated[idx] = e.target.checked;
+                        setRepeatDays(updated);
+                      }}
+                      className="accent-brand-yellow"
+                    />
+                    <span>{day}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Hours per Shift</label>
                 <input
                   type="number"
                   placeholder="8"
@@ -377,25 +450,25 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                   required
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Start Time</label>
-              <div className="flex gap-2">
-                <input
-                  type="time"
-                  value={shiftStartTime}
-                  onChange={(e) => setShiftStartTime(e.target.value)}
-                  className="h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none grow text-sm"
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={staffList.length === 0 || sites.length === 0}
-                  className="h-9 px-5 bg-brand-yellow hover:bg-amber-500 text-slate-950 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none shrink-0 text-sm disabled:opacity-50"
-                >
-                  Schedule Shift
-                </button>
+              
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Start Time</label>
+                <div className="flex gap-2">
+                  <input
+                    type="time"
+                    value={shiftStartTime}
+                    onChange={(e) => setShiftStartTime(e.target.value)}
+                    className="h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none grow text-sm"
+                    required
+                  />
+                  <button
+                    type="submit"
+                    disabled={staffList.length === 0 || sites.length === 0}
+                    className="h-9 px-5 bg-brand-yellow hover:bg-amber-500 text-slate-955 font-bold uppercase tracking-wider text-center cursor-pointer transition rounded-none shrink-0 text-sm disabled:opacity-50"
+                  >
+                    Schedule Shifts
+                  </button>
+                </div>
               </div>
             </div>
           </form>
@@ -444,16 +517,16 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
           </div>
         </div>
 
-        {/* Scheduled Shifts Roster List */}
+        {/* Scheduled Shifts Rota List */}
         <div className="bg-slate-900 border border-slate-800 p-5 space-y-4 flex flex-col h-[340px] xl:h-[352px]">
           <h3 className="text-base font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2 border-b border-slate-850 pb-2.5">
             <Clock className="w-5 h-5 text-brand-yellow" />
-            <span>Scheduled Shifts Roster</span>
+            <span>Scheduled Shifts Rota</span>
           </h3>
 
           <div className="overflow-y-auto grow space-y-2.5 pr-1 text-sm">
             {shifts.length === 0 ? (
-              <div className="text-slate-500 italic py-10 text-center">No shifts scheduled in this roster.</div>
+              <div className="text-slate-500 italic py-10 text-center">No shifts scheduled in this rota.</div>
             ) : (
               shifts.map((shift) => {
                 const staffMember = staffList.find(s => s.id === shift.staffId);

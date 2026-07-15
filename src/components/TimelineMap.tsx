@@ -7,7 +7,17 @@ import { dbGetSites, dbAddSite, dbDeleteSite, dbGetEvents, dbAddAuditLog, Site, 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-function getSiteColor(siteName: string): { bg: string; text: string; hex: string } {
+function getSiteColor(type?: string, siteName: string = ""): { bg: string; text: string; hex: string } {
+  if (type === "global") {
+    return { bg: "bg-purple-600", text: "text-purple-400", hex: "#a855f7" };
+  }
+  if (type === "merchant") {
+    return { bg: "bg-amber-500", text: "text-amber-400", hex: "#f59e0b" };
+  }
+  if (type === "geofence") {
+    return { bg: "bg-blue-600", text: "text-blue-400", hex: "#3b82f6" };
+  }
+
   const name = siteName.toLowerCase();
   
   if (name.includes("castle")) {
@@ -59,6 +69,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
   const [siteLat, setSiteLat] = useState("");
   const [siteLng, setSiteLng] = useState("");
   const [siteRadius, setSiteRadius] = useState("100");
+  const [siteType, setSiteType] = useState<"geofence" | "merchant" | "global">("geofence");
   const [formMsg, setFormMsg] = useState("");
   
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -130,7 +141,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
 
     // 1. Draw Admin Defined Geofence Sites (Bright Blue bounds, red center)
     sites.forEach((site) => {
-      const colorInfo = getSiteColor(site.name);
+      const colorInfo = getSiteColor(site.type, site.name);
 
       // Circle representing Geofence radius
       const circle = L.circle([site.lat, site.lng], {
@@ -239,6 +250,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       lat: latNum,
       lng: lngNum,
       radius: radiusNum,
+      type: siteType,
     };
 
     setFormMsg("Saving site...");
@@ -248,6 +260,7 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
       setSiteLat("");
       setSiteLng("");
       setSiteRadius("100");
+      setSiteType("geofence");
       setFormMsg("Site registered successfully!");
       
       await dbAddAuditLog(
@@ -352,17 +365,31 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
             </div>
 
             <div>
-              <label className="text-xs text-slate-450 font-bold uppercase tracking-wider block mb-1">Boundary Radius (meters)</label>
+              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Boundary Radius (meters)</label>
               <input
                 type="number"
                 placeholder="100"
                 value={siteRadius}
                 onChange={(e) => setSiteRadius(e.target.value)}
-                className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                className="w-full h-9 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm mb-3"
                 min="10"
                 max="5000"
                 required
               />
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-455 font-bold uppercase tracking-wider block mb-1">Location Type</label>
+              <select
+                value={siteType}
+                onChange={(e) => setSiteType(e.target.value as any)}
+                className="w-full h-9 px-2 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm"
+                required
+              >
+                <option value="geofence">Rota Geofence Area</option>
+                <option value="merchant">Local Merchant / Supplier</option>
+                <option value="global">Global Location (e.g. Head Office)</option>
+              </select>
             </div>
 
             <button
@@ -379,23 +406,36 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
           <div className="space-y-2 pt-3 border-t border-slate-800">
             <span className="text-xs text-slate-450 font-bold uppercase tracking-wider block">Active Geofenced Zones ({sites.length})</span>
             <div className="max-h-40 overflow-y-auto space-y-2 divide-y divide-slate-800 pr-1">
-              {sites.map((site) => (
-                <div key={site.id} className="flex justify-between items-center py-2 text-sm">
-                  <div className="truncate pr-2">
-                    <span className="font-bold text-slate-100">{site.name}</span>
-                    <span className="text-slate-500 font-semibold block text-xs mt-0.5">
-                      Radius: {site.radius}m | ({site.lat.toFixed(4)}, {site.lng.toFixed(4)})
-                    </span>
+              {sites.map((site) => {
+                const badgeColor = site.type === "global" ? "bg-purple-950/70 text-purple-400 border-purple-800/60" :
+                                   site.type === "merchant" ? "bg-amber-950/70 text-brand-yellow border-amber-800/60" :
+                                   "bg-blue-950/70 text-brand-blue border-blue-800/60";
+                const typeLabel = site.type === "global" ? "Global" :
+                                  site.type === "merchant" ? "Merchant" :
+                                  "Geofence";
+                return (
+                  <div key={site.id} className="flex justify-between items-center py-2 text-sm">
+                    <div className="truncate pr-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-100">{site.name}</span>
+                        <span className={`px-1.5 py-0.5 text-[9px] font-extrabold border rounded-none uppercase leading-none ${badgeColor}`}>
+                          {typeLabel}
+                        </span>
+                      </div>
+                      <span className="text-slate-500 font-semibold block text-xs mt-0.5">
+                        Radius: {site.radius}m | ({site.lat.toFixed(4)}, {site.lng.toFixed(4)})
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteSite(site.id, site.name)}
+                      className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
+                      title="Delete site"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
-                  <button
-                    onClick={() => handleDeleteSite(site.id, site.name)}
-                    className="p-1.5 hover:bg-slate-800 text-slate-500 hover:text-brand-red rounded transition cursor-pointer"
-                    title="Delete site"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

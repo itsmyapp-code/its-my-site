@@ -13,7 +13,9 @@ import {
   UserCheck2,
   CalendarDays,
   Menu,
-  X
+  X,
+  Loader2,
+  LogOut
 } from "lucide-react";
 
 // Components
@@ -22,7 +24,27 @@ import { ValidationPrompts } from "@/components/ValidationPrompts";
 import { GeofenceDetector } from "@/components/GeofenceDetector";
 import { OffSiteModule } from "@/components/OffSiteModule";
 import { StaffManager } from "@/components/StaffManager";
-import { dbGetAuditLogs, AuditLog, ShiftEvent, dbGetEvents, dbGetSites, dbGetStaff, dbGetShifts, Staff, Shift } from "@/lib/db";
+import { 
+  authInstance,
+  dbGetStaffMapping,
+  dbSaveSettings,
+  dbAddAuditLog,
+  dbGetAuditLogs, 
+  AuditLog, 
+  ShiftEvent, 
+  dbGetEvents, 
+  dbGetSites, 
+  dbGetStaff, 
+  dbGetShifts, 
+  Staff, 
+  Shift 
+} from "@/lib/db";
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged 
+} from "firebase/auth";
 import dynamic from "next/dynamic";
 
 const TimelineMap = dynamic(
@@ -31,8 +53,12 @@ const TimelineMap = dynamic(
 );
 
 export default function Home() {
+  const [user, setUser] = useState<any>(null);
   const [role, setRole] = useState<"admin" | "worker">("admin");
-  const [uid] = useState("admin-worker-hybrid-101");
+  const [uid, setUid] = useState("admin-worker-hybrid-101");
+  const [staffId, setStaffId] = useState<string | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [activePrompt, setActivePrompt] = useState(false);
   const [adminSubView, setAdminSubView] = useState<"overview" | "staff" | "map" | "logs">("staff");
@@ -72,13 +98,19 @@ export default function Home() {
       // Load staff list for worker view simulation
       const staffList = await dbGetStaff(uid);
       setStaffMembers(staffList);
-      if (staffList.length > 0 && !selectedStaffId) {
+      
+      // If worker is logged in, use mapped staff profile
+      if (role === "worker" && staffId) {
+        setSelectedStaffId(staffId);
+      } else if (staffList.length > 0 && !selectedStaffId) {
         setSelectedStaffId(staffList[0].id);
       }
 
       // Load shifts
       const allShifts = await dbGetShifts(uid);
-      if (selectedStaffId) {
+      if (role === "worker" && staffId) {
+        setWorkerShifts(allShifts.filter(s => s.staffId === staffId));
+      } else if (selectedStaffId) {
         setWorkerShifts(allShifts.filter(s => s.staffId === selectedStaffId));
       } else if (staffList.length > 0) {
         setWorkerShifts(allShifts.filter(s => s.staffId === staffList[0].id));
@@ -88,9 +120,52 @@ export default function Home() {
     }
   };
 
+  // Listen to Firebase Auth state
   useEffect(() => {
-    fetchDashboardData();
-  }, [uid, refreshTrigger, selectedStaffId]);
+    if (!authInstance) {
+      setLoadingAuth(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(authInstance, async (firebaseUser) => {
+      setLoadingAuth(true);
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        
+        if (firebaseUser.email) {
+          const mapping = await dbGetStaffMapping(firebaseUser.email);
+          if (mapping) {
+            setRole("worker");
+            setUid(mapping.adminUid);
+            setStaffId(mapping.staffId);
+            setSelectedStaffId(mapping.staffId);
+          } else {
+            setRole("admin");
+            setUid(firebaseUser.uid);
+            setStaffId(null);
+          }
+        } else {
+          setRole("admin");
+          setUid(firebaseUser.uid);
+          setStaffId(null);
+        }
+      } else {
+        setUser(null);
+        setRole("admin");
+        setUid("admin-worker-hybrid-101");
+        setStaffId(null);
+      }
+      setLoadingAuth(false);
+    });
+
+    return () => unsubscribe();
+  }, [authInstance]);
+
+  useEffect(() => {
+    if (!loadingAuth) {
+      fetchDashboardData();
+    }
+  }, [uid, refreshTrigger, selectedStaffId, role, staffId, loadingAuth]);
 
   const handleValidationSuccess = (event: ShiftEvent) => {
     setRefreshTrigger(prev => prev + 1);
@@ -103,6 +178,18 @@ export default function Home() {
   const handleDataModified = () => {
     setRefreshTrigger(prev => prev + 1);
   };
+
+  if (authInstance && !user) {
+    if (loadingAuth) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center min-h-screen bg-slate-950 font-mono text-sm text-slate-400">
+          <Loader2 className="w-8 h-8 animate-spin text-brand-blue mb-4" />
+          <span>ESTABLISHING SECURE CONNECTION...</span>
+        </div>
+      );
+    }
+    return <LoginScreen />;
+  }
 
   return (
     <div className="flex-1 flex flex-col text-sm sm:text-base">
@@ -120,7 +207,7 @@ export default function Home() {
             <div>
               <h1 className="text-base sm:text-lg font-bold text-slate-100 uppercase tracking-widest flex items-center gap-2">
                 <span>itsmysite</span>
-                <span className="text-xs bg-brand-blue text-slate-950 px-1.5 py-0.5 font-extrabold uppercase">
+                <span className="text-xs bg-brand-blue text-slate-955 px-1.5 py-0.5 font-extrabold uppercase">
                   EDGE V4
                 </span>
               </h1>
@@ -130,29 +217,32 @@ export default function Home() {
 
           {/* VIEWPORT MODE SELECTOR & MENU */}
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2.5 bg-slate-950 border border-slate-850 p-1.5 rounded-none text-xs sm:text-sm">
-              <span className="text-slate-500 font-bold px-2 uppercase tracking-wide">SIMULATOR:</span>
-              <button
-                onClick={() => setRole("admin")}
-                className={`px-4 py-1.5 cursor-pointer transition uppercase font-bold rounded-none ${
-                  role === "admin"
-                    ? "bg-brand-blue text-slate-955"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Admin Dashboard
-              </button>
-              <button
-                onClick={() => setRole("worker")}
-                className={`px-4 py-1.5 cursor-pointer transition uppercase font-bold rounded-none ${
-                  role === "worker"
-                    ? "bg-brand-yellow text-slate-955"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Field Worker App
-              </button>
-            </div>
+            {/* Show simulator toggle ONLY for Admins or in sandbox mode */}
+            {(role === "admin" || !staffId) && (
+              <div className="flex items-center gap-2.5 bg-slate-950 border border-slate-850 p-1.5 rounded-none text-xs sm:text-sm">
+                <span className="text-slate-500 font-bold px-2 uppercase tracking-wide">SIMULATOR:</span>
+                <button
+                  onClick={() => setRole("admin")}
+                  className={`px-4 py-1.5 cursor-pointer transition uppercase font-bold rounded-none ${
+                    role === "admin"
+                      ? "bg-brand-blue text-slate-955"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Admin Dashboard
+                </button>
+                <button
+                  onClick={() => setRole("worker")}
+                  className={`px-4 py-1.5 cursor-pointer transition uppercase font-bold rounded-none ${
+                    role === "worker"
+                      ? "bg-brand-yellow text-slate-955"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Field Worker App
+                </button>
+              </div>
+            )}
 
             {/* Hamburger button (visible in Admin view) */}
             {role === "admin" && (
@@ -162,6 +252,22 @@ export default function Home() {
                 title="Admin Control Menu"
               >
                 <Menu className="w-5 h-5" />
+              </button>
+            )}
+
+            {/* Sign Out Button */}
+            {user && (
+              <button
+                onClick={async () => {
+                  if (authInstance) {
+                    await signOut(authInstance);
+                  }
+                }}
+                className="h-10 px-4 border border-slate-850 bg-slate-955 hover:bg-slate-900 text-slate-200 hover:text-slate-100 flex items-center justify-center font-bold uppercase transition cursor-pointer text-xs gap-1.5"
+                title="Sign Out"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Sign Out</span>
               </button>
             )}
           </div>
@@ -194,7 +300,7 @@ export default function Home() {
                   adminSubView === "staff" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-350"
                 }`}
               >
-                Staff Directory & Roster
+                Staff Directory & Rota
               </button>
               <button 
                 onClick={() => setAdminSubView("map")}
@@ -271,7 +377,7 @@ export default function Home() {
                     </div>
                     <div className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      <span>LocalStorage Sandbox</span>
+                      <span>{authInstance ? "Firebase Active" : "LocalStorage Sandbox"}</span>
                     </div>
                     <div className="text-xs text-slate-500 font-bold uppercase">Auto-Offline Cache Enabled</div>
                   </div>
@@ -289,7 +395,7 @@ export default function Home() {
                     </button>
                     <button 
                       onClick={() => setAdminSubView("map")} 
-                      className="p-4 border border-slate-800 bg-slate-950 hover:bg-slate-850 text-slate-200 font-bold uppercase transition text-center cursor-pointer text-xs tracking-wider"
+                      className="p-4 border border-slate-800 bg-slate-955 hover:bg-slate-850 text-slate-200 font-bold uppercase transition text-center cursor-pointer text-xs tracking-wider"
                     >
                       Open Live Tracking Map
                     </button>
@@ -331,7 +437,7 @@ export default function Home() {
                     <div className="text-slate-600 text-center py-12 italic">No audit records logged. Actions will report here.</div>
                   ) : (
                     auditLogs.map((log) => (
-                      <div key={log.id} className="p-3 bg-slate-950 border border-slate-850 rounded-none space-y-1.5">
+                      <div key={log.id} className="p-3 bg-slate-955 border border-slate-850 rounded-none space-y-1.5">
                         <div className="flex justify-between items-center text-xs">
                           <span className="font-extrabold text-purple-400 uppercase">{log.action}</span>
                           <span className="text-slate-500 font-medium">
@@ -366,33 +472,35 @@ export default function Home() {
             {/* Header Accent */}
             <div className="absolute top-0 left-0 right-0 h-1 bg-brand-yellow" />
             
-            {/* Staff Member Selector (Choose Profile) */}
-            <div className="bg-slate-900 border border-slate-800 p-4 space-y-2">
-              <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block">
-                Select Your Worker Profile
-              </label>
-              <select
-                value={selectedStaffId}
-                onChange={(e) => setSelectedStaffId(e.target.value)}
-                className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-sm font-semibold"
-              >
-                {staffMembers.map(member => (
-                  <option key={member.id} value={member.id}>{member.name}</option>
-                ))}
-                {staffMembers.length === 0 && <option value="">No staff registered. Toggle to Admin View to add staff.</option>}
-              </select>
-            </div>
+            {/* Staff Member Selector (Choose Profile) - only show dropdown if running in simulator (no resolved staffId) */}
+            {!staffId && (
+              <div className="bg-slate-900 border border-slate-800 p-4 space-y-2">
+                <label className="text-xs text-slate-400 font-bold uppercase tracking-wider block mb-1">
+                  Select Your Worker Profile
+                </label>
+                <select
+                  value={selectedStaffId}
+                  onChange={(e) => setSelectedStaffId(e.target.value)}
+                  className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-sm font-semibold"
+                >
+                  {staffMembers.map(member => (
+                    <option key={member.id} value={member.id}>{member.name}</option>
+                  ))}
+                  {staffMembers.length === 0 && <option value="">No staff registered. Toggle to Admin View to add staff.</option>}
+                </select>
+              </div>
+            )}
 
             {/* Worker Shift Status Badge */}
-            <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-none text-sm">
+            <div className="flex items-center justify-between bg-slate-900 border border-slate-850 p-4 rounded-none text-sm">
               <div>
                 <span className="text-xs text-slate-500 font-bold uppercase tracking-wider block">Logged In As:</span>
                 <span className="text-sm font-bold text-slate-100">
-                  {staffMembers.find(s => s.id === selectedStaffId)?.name || "Guest Operator"}
+                  {staffMembers.find(s => s.id === selectedStaffId)?.name || (user ? user.email : "Guest Operator")}
                 </span>
               </div>
               <div className="text-right">
-                <span className="text-xs text-slate-500 font-bold uppercase tracking-wider block">Your Roster Shifts:</span>
+                <span className="text-xs text-slate-500 font-bold uppercase tracking-wider block">Your Scheduled Shifts:</span>
                 <span className="text-sm font-bold text-brand-yellow">{workerShifts.length} scheduled</span>
               </div>
             </div>
@@ -406,7 +514,7 @@ export default function Home() {
               <div className="space-y-2.5 max-h-48 overflow-y-auto">
                 {workerShifts.length === 0 ? (
                   <div className="text-slate-500 text-xs italic py-4 text-center">
-                    You have no scheduled shifts assigned in this roster.
+                    You have no scheduled shifts assigned in this rota.
                   </div>
                 ) : (
                   workerShifts.map((shift) => (
@@ -421,7 +529,7 @@ export default function Home() {
                         <span className={`px-2 py-0.5 text-[9px] font-bold border rounded-none uppercase tracking-wider leading-none ${
                           shift.validated 
                             ? "bg-emerald-950 text-emerald-400 border-emerald-800" 
-                            : "bg-slate-900 text-rose-400 border-rose-950 animate-pulse"
+                            : "bg-slate-900 text-rose-400 border-rose-955 animate-pulse"
                         }`}>
                           {shift.validated ? "VALIDATED" : "CHECK-IN REQ"}
                         </span>
@@ -451,7 +559,7 @@ export default function Home() {
                 activePrompt={activePrompt}
                 setActivePrompt={setActivePrompt}
                 selectedStaffId={selectedStaffId}
-                selectedStaffName={staffMembers.find(s => s.id === selectedStaffId)?.name}
+                selectedStaffName={staffMembers.find(s => s.id === selectedStaffId)?.name || (user ? user.email : undefined)}
               />
             </div>
 
@@ -460,7 +568,7 @@ export default function Home() {
               uid={uid} 
               onOffSiteSuccess={handleOffSiteSuccess} 
               selectedStaffId={selectedStaffId}
-              selectedStaffName={staffMembers.find(s => s.id === selectedStaffId)?.name}
+              selectedStaffName={staffMembers.find(s => s.id === selectedStaffId)?.name || (user ? user.email : undefined)}
             />
 
           </div>
@@ -501,7 +609,7 @@ export default function Home() {
           {/* Backdrop Blur overlay */}
           <div 
             onClick={() => setIsMenuOpen(false)}
-            className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm transition-opacity" 
+            className="fixed inset-0 bg-slate-955/60 backdrop-blur-sm transition-opacity" 
           />
           
           {/* Menu Panel */}
@@ -529,10 +637,10 @@ export default function Home() {
                   className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
                     adminSubView === "staff" 
                       ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-950 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
                   }`}
                 >
-                  Staff Directory & Roster
+                  Staff Directory & Rota
                 </button>
 
                 <button
@@ -540,7 +648,7 @@ export default function Home() {
                   className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
                     adminSubView === "map" 
                       ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-950 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
                   }`}
                 >
                   Geofence Map & Tracking
@@ -562,7 +670,7 @@ export default function Home() {
                   className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
                     adminSubView === "logs" 
                       ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-950 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
                   }`}
                 >
                   Audit Registers
@@ -582,6 +690,138 @@ export default function Home() {
       {/* COMPLIANCE COOKIE LAYER */}
       <ConsentBanner />
 
+    </div>
+  );
+}
+
+function LoginScreen() {
+  const [isRegister, setIsRegister] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      setError("Please fill in all fields.");
+      return;
+    }
+    setError("");
+    setLoading(true);
+
+    try {
+      if (isRegister) {
+        // Register new Admin
+        const userCredential = await createUserWithEmailAndPassword(authInstance, email.trim(), password);
+        await dbSaveSettings(userCredential.user.uid, {
+          subscribed: true,
+          subscriptionStartDate: new Date().toISOString(),
+          cancellationRequested: false,
+        });
+        await dbAddAuditLog(
+          userCredential.user.uid,
+          "ADMIN_ACCOUNT_CREATED",
+          `Admin registered account for ${email.trim()}.`
+        );
+      } else {
+        // Sign In
+        await signInWithEmailAndPassword(authInstance, email.trim(), password);
+      }
+    } catch (err: any) {
+      console.error(err);
+      let errMsg = "Authentication failed. Please check your credentials.";
+      if (err.code === "auth/email-already-in-use") {
+        errMsg = "This email address is already in use.";
+      } else if (err.code === "auth/weak-password") {
+        errMsg = "Password must be at least 6 characters.";
+      } else if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+        errMsg = "Invalid email or password.";
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+      setError(errMsg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex-1 flex items-center justify-center min-h-screen bg-slate-955 px-4 py-12 font-mono text-sm text-slate-350">
+      <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-8 shadow-2xl relative overflow-hidden">
+        {/* Decorative Top Bar */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-brand-blue" />
+        
+        {/* Brand Header */}
+        <div className="text-center mb-8">
+          <img src="/itsmysite.png?v=2" alt="itsmysite" className="h-12 mx-auto mb-4 object-contain" />
+          <h2 className="text-lg font-bold text-slate-100 uppercase tracking-widest flex items-center justify-center gap-2">
+            <span>itsmysite</span>
+            <span className="text-xs bg-brand-blue text-slate-955 px-1.5 py-0.5 font-extrabold uppercase">SECURE</span>
+          </h2>
+          <p className="text-xs text-slate-500 font-bold mt-1">GEOFENCING & SHIFT MANAGEMENT PORTAL</p>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="p-3 bg-rose-955/50 border border-rose-900 text-rose-350 font-bold text-xs">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Email Address</label>
+            <input
+              type="email"
+              placeholder="operator@company.co.uk"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-sm rounded-none"
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full h-10 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer border-none"
+          >
+            {loading ? (
+              <span className="animate-pulse">AUTHENTICATING...</span>
+            ) : (
+              <span>{isRegister ? "Register Admin Account" : "Secure Log In"}</span>
+            )}
+          </button>
+        </form>
+
+        {/* Toggle Mode */}
+        <div className="mt-6 text-center pt-4 border-t border-slate-850">
+          <button
+            onClick={() => { setIsRegister(!isRegister); setError(""); }}
+            className="text-xs text-slate-400 hover:text-brand-blue font-bold uppercase transition cursor-pointer bg-transparent border-none"
+          >
+            {isRegister ? "Already have an account? Sign In" : "Need to set up a new company? Register Admin"}
+          </button>
+        </div>
+
+        {/* Compliance Note */}
+        <p className="text-[10px] text-slate-600 leading-normal mt-8 text-center font-semibold uppercase tracking-wider">
+          Access is monitored and audited. Fully compliant with UK GDPR Article 24 accountability standards.
+        </p>
+      </div>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import {
   persistentLocalCache, 
   persistentMultipleTabManager 
 } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
 // Types definition
 export interface Site {
@@ -22,6 +23,7 @@ export interface Site {
   lat: number;
   lng: number;
   radius: number; // in meters
+  type?: "geofence" | "merchant" | "global";
 }
 
 export interface ShiftEvent {
@@ -56,6 +58,7 @@ export interface Staff {
   id: string;
   name: string;
   phone: string;
+  email?: string;
   hourlyRate: number;
 }
 
@@ -103,18 +106,21 @@ const DEFAULT_STAFF: Staff[] = [
     id: "staff-1",
     name: "John Doe",
     phone: "07700 900077",
+    email: "john@example.com",
     hourlyRate: 15.00,
   },
   {
     id: "staff-2",
     name: "Sarah Jenkins",
     phone: "07700 900088",
+    email: "sarah@example.com",
     hourlyRate: 18.50,
   },
   {
     id: "staff-3",
     name: "Robert Carter",
     phone: "07700 900099",
+    email: "robert@example.com",
     hourlyRate: 14.00,
   },
 ];
@@ -182,6 +188,7 @@ const isFirebaseEnabled = !!(
 );
 
 let dbInstance: any = null;
+export let authInstance: any = null;
 
 if (isFirebaseEnabled) {
   try {
@@ -192,10 +199,12 @@ if (isFirebaseEnabled) {
         tabManager: persistentMultipleTabManager(),
       }),
     });
-    console.log("Firebase Firestore initialized with persistent local cache.");
+    authInstance = getAuth(app);
+    console.log("Firebase Firestore and Auth initialized.");
   } catch (error) {
-    console.error("Failed to initialize Firebase Firestore, falling back to LocalStorage:", error);
+    console.error("Failed to initialize Firebase services, falling back to LocalStorage:", error);
     dbInstance = null;
+    authInstance = null;
   }
 } else {
   console.log("No Firebase configuration found. Running in LocalStorage Sandbox Mode.");
@@ -439,6 +448,9 @@ export async function dbGetStaff(uid: string): Promise<Staff[]> {
         for (const item of DEFAULT_STAFF) {
           const { id, ...rest } = item;
           await setDoc(doc(colRef, id), rest);
+          if (item.email) {
+            await dbAddStaffMapping(item.email, uid, id, item.name);
+          }
           staff.push(item);
         }
       }
@@ -453,6 +465,12 @@ export async function dbGetStaff(uid: string): Promise<Staff[]> {
   if (staff.length === 0) {
     staff = [...DEFAULT_STAFF];
     setLocalData(localKey, staff);
+    for (const item of staff) {
+      if (item.email) {
+        const mappingKey = `itsmysite_staff_mappings_${item.email.toLowerCase()}`;
+        setLocalData(mappingKey, { adminUid: uid, staffId: item.id, name: item.name });
+      }
+    }
   }
   return staff;
 }
@@ -464,6 +482,9 @@ export async function dbAddStaff(uid: string, staff: Omit<Staff, "id">): Promise
   if (dbInstance) {
     try {
       await setDoc(doc(dbInstance, "users", uid, "staff", id), staff);
+      if (staff.email) {
+        await dbAddStaffMapping(staff.email, uid, id, staff.name);
+      }
       return id;
     } catch (err) {
       console.error("Error adding staff to Firestore, using local fallback:", err);
@@ -474,10 +495,23 @@ export async function dbAddStaff(uid: string, staff: Omit<Staff, "id">): Promise
   const staffList = await dbGetStaff(uid);
   staffList.push(newStaff);
   setLocalData(localKey, staffList);
+  if (staff.email) {
+    await dbAddStaffMapping(staff.email, uid, id, staff.name);
+  }
   return id;
 }
 
 export async function dbDeleteStaff(uid: string, staffId: string): Promise<void> {
+  try {
+    const staffList = await dbGetStaff(uid);
+    const staff = staffList.find(s => s.id === staffId);
+    if (staff && staff.email) {
+      await dbDeleteStaffMapping(staff.email);
+    }
+  } catch (err) {
+    console.error("Failed to clean up staff mapping on deletion:", err);
+  }
+
   if (dbInstance) {
     try {
       await deleteDoc(doc(dbInstance, "users", uid, "staff", staffId));
@@ -491,6 +525,76 @@ export async function dbDeleteStaff(uid: string, staffId: string): Promise<void>
   const staffList = await dbGetStaff(uid);
   const updated = staffList.filter((s) => s.id !== staffId);
   setLocalData(localKey, updated);
+}
+
+// Mappings to resolve workers to their respective admin's space
+export interface StaffMapping {
+  adminUid: string;
+  staffId: string;
+  name: string;
+}
+
+export async function dbAddStaffMapping(email: string, adminUid: string, staffId: string, name: string): Promise<void> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return;
+
+  if (dbInstance) {
+    try {
+      await setDoc(doc(dbInstance, "staff_mappings", normalizedEmail), {
+        adminUid,
+        staffId,
+        name,
+      });
+      return;
+    } catch (err) {
+      console.error("Error writing staff mapping to Firestore:", err);
+    }
+  }
+
+  // LocalStorage fallback
+  const localKey = `itsmysite_staff_mappings_${normalizedEmail}`;
+  setLocalData(localKey, { adminUid, staffId, name });
+}
+
+export async function dbDeleteStaffMapping(email: string): Promise<void> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return;
+
+  if (dbInstance) {
+    try {
+      await deleteDoc(doc(dbInstance, "staff_mappings", normalizedEmail));
+      return;
+    } catch (err) {
+      console.error("Error deleting staff mapping from Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_staff_mappings_${normalizedEmail}`;
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(localKey);
+  }
+}
+
+export async function dbGetStaffMapping(email: string): Promise<StaffMapping | null> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  if (dbInstance) {
+    try {
+      const docRef = doc(dbInstance, "staff_mappings", normalizedEmail);
+      const snapshot = await getDoc(docRef);
+      if (snapshot.exists()) {
+        return snapshot.data() as StaffMapping;
+      }
+      return null;
+    } catch (err) {
+      console.error("Error reading staff mapping from Firestore:", err);
+    }
+  }
+
+  // LocalStorage fallback
+  const localKey = `itsmysite_staff_mappings_${normalizedEmail}`;
+  return getLocalData<StaffMapping | null>(localKey, null);
 }
 
 // ==========================================

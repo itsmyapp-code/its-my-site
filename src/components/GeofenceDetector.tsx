@@ -164,37 +164,78 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
         const shifts = await dbGetShifts(uid);
         const todayStr = new Date().toISOString().split("T")[0];
         
-        // Find active shift matching staffId, date, and siteName/Id
-        const matchedShift = shifts.find(
-          s => s.staffId === selectedStaffId && 
-          s.date === todayStr && 
-          s.siteName === matchedSite?.name &&
-          !s.validated
-        );
+        // Find active shift matching staffId, date.
+        // For global/merchant check-ins, we can validate ANY shift scheduled for today.
+        // For standard geofences, we prefer matching the exact site.
+        let matchedShift = null;
+        if (matchedSite?.type === "global" || matchedSite?.type === "merchant") {
+          matchedShift = shifts.find(
+            s => s.staffId === selectedStaffId && 
+            s.date === todayStr && 
+            !s.validated
+          );
+        } else {
+          matchedShift = shifts.find(
+            s => s.staffId === selectedStaffId && 
+            s.date === todayStr && 
+            s.siteName === matchedSite?.name &&
+            !s.validated
+          );
+          // Fallback: if not found, check if there's any shift scheduled for today
+          if (!matchedShift) {
+            matchedShift = shifts.find(
+              s => s.staffId === selectedStaffId && 
+              s.date === todayStr && 
+              !s.validated
+            );
+          }
+        }
 
         if (matchedShift) {
           await dbUpdateShift(uid, matchedShift.id, {
             validated: true,
             validatedAt: new Date().toISOString()
           });
-          await dbAddAuditLog(
-            uid,
-            "SHIFT_VALIDATED_AUTOMATICALLY",
-            `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated at site ${matchedSite.name} via geofencing.`
-          );
+          
+          let logAction = "SHIFT_VALIDATED_AUTOMATICALLY";
+          let logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated at site ${matchedSite.name} via geofencing.`;
+          
+          if (matchedSite?.type === "global") {
+            logAction = "SHIFT_VALIDATED_VIA_GLOBAL_LOCATION";
+            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Global Location (${matchedSite.name}).`;
+          } else if (matchedSite?.type === "merchant") {
+            logAction = "SHIFT_VALIDATED_VIA_MERCHANT";
+            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Merchant Location (${matchedSite.name}).`;
+          }
+          
+          await dbAddAuditLog(uid, logAction, logDetails);
         } else {
-          await dbAddAuditLog(
-            uid,
-            "SHIFT_CHECK_IN_SUCCESS",
-            `Check-in recorded for worker profile. Located at ${matchedSite.name} (distance: ${minDistance.toFixed(1)}m from center).`
-          );
+          let logAction = "LOCATION_CHECK_IN_SUCCESS";
+          let logDetails = `Check-in recorded at ${matchedSite.name} (distance: ${minDistance.toFixed(1)}m from center).`;
+          
+          if (matchedSite?.type === "global") {
+            logAction = "GLOBAL_LOCATION_CHECK_IN";
+            logDetails = `Worker ${selectedStaffName || "unknown"} checked in at Global Location (${matchedSite.name}).`;
+          } else if (matchedSite?.type === "merchant") {
+            logAction = "MERCHANT_CHECK_IN";
+            logDetails = `Worker ${selectedStaffName || "unknown"} checked in at Merchant Location (${matchedSite.name}).`;
+          }
+          
+          await dbAddAuditLog(uid, logAction, logDetails);
         }
       } else {
-        await dbAddAuditLog(
-          uid,
-          "SHIFT_CHECK_IN_SUCCESS",
-          `General check-in successful. Located at ${matchedSite.name} (distance: ${minDistance.toFixed(1)}m from center).`
-        );
+        let logAction = "SHIFT_CHECK_IN_SUCCESS";
+        let logDetails = `General check-in successful. Located at ${matchedSite.name} (distance: ${minDistance.toFixed(1)}m from center).`;
+        
+        if (matchedSite?.type === "global") {
+          logAction = "GLOBAL_LOCATION_CHECK_IN_GENERAL";
+          logDetails = `General check-in at Global Location (${matchedSite.name}).`;
+        } else if (matchedSite?.type === "merchant") {
+          logAction = "MERCHANT_CHECK_IN_GENERAL";
+          logDetails = `General check-in at Merchant Location (${matchedSite.name}).`;
+        }
+        
+        await dbAddAuditLog(uid, logAction, logDetails);
       }
 
       onValidationSuccess(fullEvent);
