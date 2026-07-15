@@ -18,7 +18,8 @@ import {
   LogOut,
   Eye,
   EyeOff,
-  PoundSterling
+  PoundSterling,
+  HelpCircle
 } from "lucide-react";
 
 // Components
@@ -68,6 +69,7 @@ export default function Home() {
   const [activePrompt, setActivePrompt] = useState(false);
   const [adminSubView, setAdminSubView] = useState<"overview" | "staff" | "map" | "logs">("staff");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<"menu" | "help">("menu");
   
   // Dashboard Metrics & Lists
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -413,12 +415,12 @@ export default function Home() {
               </div>
             )}
 
-            {/* Hamburger button (visible in Admin view) */}
-            {role === "admin" && (
+            {/* Hamburger button (visible for both Admin and Staff) */}
+            {(role === "admin" || role === "worker") && (
               <button
                 onClick={() => setIsMenuOpen(true)}
                 className="h-10 w-10 border border-slate-850 bg-slate-955 hover:bg-slate-900 text-slate-200 hover:text-slate-100 flex items-center justify-center transition cursor-pointer"
-                title="Admin Control Menu"
+                title="Help & Control Menu"
               >
                 <Menu className="w-5 h-5" />
               </button>
@@ -788,8 +790,8 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* ADMIN CONTROL SIDE DRAWER */}
-      {isMenuOpen && role === "admin" && (
+      {/* SYSTEM CONTROL & HELP DRAWER */}
+      {isMenuOpen && (role === "admin" || role === "worker") && (
         <div className="fixed inset-0 z-50 flex justify-end">
           {/* Backdrop Blur overlay */}
           <div 
@@ -798,14 +800,16 @@ export default function Home() {
           />
           
           {/* Menu Panel */}
-          <div className="relative w-80 max-w-full bg-slate-900 border-l border-slate-800 p-6 flex flex-col justify-between shadow-2xl animate-in slide-in-from-right duration-200">
-            <div className="space-y-6">
+          <div className="relative w-80 max-w-full bg-slate-900 border-l border-slate-800 p-6 flex flex-col justify-between shadow-2xl animate-in slide-in-from-right duration-200 z-50">
+            <div className="space-y-6 overflow-y-auto max-h-[85vh] pr-1">
               
               {/* Drawer Header */}
               <div className="flex justify-between items-center border-b border-slate-800 pb-4">
                 <div className="flex items-center gap-2">
                   <Menu className="w-5 h-5 text-brand-blue" />
-                  <span className="font-mono font-bold text-slate-100 uppercase tracking-wider text-sm">Admin Control</span>
+                  <span className="font-mono font-bold text-slate-100 uppercase tracking-wider text-sm">
+                    {role === "admin" ? "Admin Control" : "System Support"}
+                  </span>
                 </div>
                 <button 
                   onClick={() => setIsMenuOpen(false)}
@@ -815,111 +819,189 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Navigation Links */}
-              <nav className="flex flex-col gap-2.5 font-mono text-sm">
-                <button
-                  onClick={() => { setAdminSubView("staff"); setIsMenuOpen(false); }}
-                  className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
-                    adminSubView === "staff" 
-                      ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
-                  }`}
-                >
-                  Staff Directory & Rota
-                </button>
-
-                <button
-                  onClick={() => { setAdminSubView("map"); setIsMenuOpen(false); }}
-                  className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
-                    adminSubView === "map" 
-                      ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
-                  }`}
-                >
-                  Geofence Map & Tracking
-                </button>
-
-                <button
-                  onClick={() => { setAdminSubView("overview"); setIsMenuOpen(false); }}
-                  className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
-                    adminSubView === "overview" 
-                      ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-955 hover:bg-slate-850 text-slate-400 border-slate-850"
-                  }`}
-                >
-                  Analytics Dashboard
-                </button>
-
-                <button
-                  onClick={() => { setAdminSubView("logs"); setIsMenuOpen(false); }}
-                  className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition ${
-                    adminSubView === "logs" 
-                      ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
-                      : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
-                  }`}
-                >
-                  Audit Registers
-                </button>
-              </nav>
-
-              {/* Shift Hours & Estimated Payroll Report (Admin Drawer) */}
-              {(() => {
-                const totalSchHours = allAdminShifts.reduce((sum, s) => sum + s.hours, 0);
-                const totalValHours = allAdminShifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
-                const payDetails = allAdminShifts.reduce((acc, shift) => {
-                  const staff = allAdminStaff.find(s => s.id === shift.staffId);
-                  const rate = staff ? staff.hourlyRate : 15.00;
-                  const pay = shift.hours * rate;
-                  if (shift.validated) {
-                    acc.validatedPay += pay;
-                  } else {
-                    acc.pendingPay += pay;
-                  }
-                  return acc;
-                }, { validatedPay: 0, pendingPay: 0 });
-                const totPayroll = payDetails.validatedPay + payDetails.pendingPay;
-
-                return (
-                  <div className="bg-slate-950 border border-slate-850 p-4 space-y-3 font-mono text-xs">
-                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2 text-slate-200">
-                      <PoundSterling className="w-4 h-4 text-brand-blue" />
-                      <span className="font-bold uppercase tracking-wider">Payroll Report (GBP)</span>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-slate-400">
-                        <span className="text-slate-500 font-bold uppercase">Scheduled</span>
-                        <span className="font-extrabold">{totalSchHours.toFixed(1)} hrs</span>
-                      </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span className="text-slate-500 font-bold uppercase">Validated</span>
-                        <span className="text-brand-blue font-extrabold">{totalValHours.toFixed(1)} hrs</span>
-                      </div>
-                      <div className="flex justify-between border-t border-slate-850 pt-2 text-slate-350">
-                        <span className="text-slate-500 font-bold uppercase">Total Est. Pay</span>
-                        <span className="text-brand-yellow font-extrabold">£{totPayroll.toFixed(2)}</span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1 text-[11px] border-t border-slate-850 pt-2 text-slate-500 font-medium">
-                      <div className="flex justify-between">
-                        <span>Verified Pay:</span>
-                        <span className="text-emerald-500 font-bold">£{payDetails.validatedPay.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Pending Pay:</span>
-                        <span className="text-rose-400 font-bold">£{payDetails.pendingPay.toFixed(2)}</span>
-                      </div>
-                    </div>
+              {drawerTab === "help" || role === "worker" ? (
+                /* ---------------- HELP & INSTRUCTIONS VIEW ---------------- */
+                <div className="space-y-4 font-sans text-slate-350">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
+                    <span className="font-mono font-bold text-slate-100 uppercase tracking-wider text-xs flex items-center gap-1.5">
+                      <HelpCircle className="w-4 h-4 text-brand-yellow animate-pulse" />
+                      <span>Quick Help Manual</span>
+                    </span>
+                    {role === "admin" && (
+                      <button
+                        onClick={() => setDrawerTab("menu")}
+                        className="text-xs text-brand-blue font-bold hover:underline cursor-pointer"
+                      >
+                        &larr; Control Panel
+                      </button>
+                    )}
                   </div>
-                );
-              })()}
+
+                  <div className="space-y-4 text-xs leading-relaxed">
+                    {/* Worker Instructions */}
+                    <div className="space-y-2 bg-slate-950/70 border border-slate-850 p-3">
+                      <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-widest block border-b border-slate-800 pb-1">
+                        📲 Worker PWA Setup (Mobile App)
+                      </span>
+                      <p className="font-bold text-slate-200">How to add to your Phone:</p>
+                      <ul className="list-disc pl-4 space-y-1.5 text-slate-400">
+                        <li>
+                          <strong className="text-slate-300">Apple iOS (Safari):</strong> Tap the <strong className="text-slate-100">Share</strong> icon (square with up-arrow) at the bottom, scroll down, and select <strong className="text-slate-100">"Add to Home Screen"</strong>.
+                        </li>
+                        <li>
+                          <strong className="text-slate-300">Android (Chrome):</strong> Tap the <strong className="text-slate-100">Three-Dot Menu</strong> at the top-right, and choose <strong className="text-slate-100">"Install App"</strong> or <strong className="text-slate-100">"Add to Home Screen"</strong>.
+                        </li>
+                      </ul>
+                      <p className="pt-2 font-bold text-slate-200">Operator Guidelines:</p>
+                      <ol className="list-decimal pl-4 space-y-1 text-slate-400">
+                        <li>Open the app on your home screen and log in using your registered email.</li>
+                        <li>Accept <strong className="text-slate-300">Location Permissions</strong> to enable on-site check-in verification.</li>
+                        <li>When validation prompts sound, tap <strong className="text-slate-100">"Validate My Shift Location"</strong>.</li>
+                        <li>If leaving site for transit (supplies/errands), log your journey in the <strong className="text-slate-100">Transit Departure Logger</strong>.</li>
+                      </ol>
+                    </div>
+
+                    {/* Admin Instructions */}
+                    {role === "admin" && (
+                      <div className="space-y-2 bg-slate-950/70 border border-slate-850 p-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-widest block border-b border-slate-800 pb-1">
+                          🛡️ Admin Dashboard Guide
+                        </span>
+                        <ul className="list-disc pl-4 space-y-1.5 text-slate-400">
+                          <li>
+                            <strong className="text-slate-300">Roster Scheduling:</strong> Register workers and schedule dates/shifts. Workers sign in using these pre-registered emails.
+                          </li>
+                          <li>
+                            <strong className="text-slate-300">Geofencing & Locations:</strong> Draw geofences. Configure checkpoints and pre-define transit locations workers can log.
+                          </li>
+                          <li>
+                            <strong className="text-slate-300">Validate Now:</strong> Force an immediate manual validation prompt onto the screen of a specific worker or all workers.
+                          </li>
+                          <li>
+                            <strong className="text-slate-300">Admin Areas:</strong> Link manager offices or depots to sites to validate associated worker rota shifts.
+                          </li>
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* ---------------- ADMIN MENU PANELS VIEW ---------------- */
+                <>
+                  {/* Navigation Links */}
+                  <nav className="flex flex-col gap-2.5 font-mono text-sm">
+                    <button
+                      onClick={() => { setAdminSubView("staff"); setIsMenuOpen(false); }}
+                      className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer ${
+                        adminSubView === "staff" 
+                          ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
+                          : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      }`}
+                    >
+                      Staff Directory & Rota
+                    </button>
+
+                    <button
+                      onClick={() => { setAdminSubView("map"); setIsMenuOpen(false); }}
+                      className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer ${
+                        adminSubView === "map" 
+                          ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
+                          : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      }`}
+                    >
+                      Geofence Map & Tracking
+                    </button>
+
+                    <button
+                      onClick={() => { setAdminSubView("overview"); setIsMenuOpen(false); }}
+                      className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer ${
+                        adminSubView === "overview" 
+                          ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
+                          : "bg-slate-955 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      }`}
+                    >
+                      Analytics Dashboard
+                    </button>
+
+                    <button
+                      onClick={() => { setAdminSubView("logs"); setIsMenuOpen(false); }}
+                      className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer ${
+                        adminSubView === "logs" 
+                          ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
+                          : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      }`}
+                    >
+                      Audit Registers
+                    </button>
+
+                    <button
+                      onClick={() => { setDrawerTab("help"); }}
+                      className="w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer bg-slate-905 hover:bg-slate-850 text-brand-yellow border-slate-850"
+                    >
+                      Help & PWA Guide
+                    </button>
+                  </nav>
+
+                  {/* Shift Hours & Estimated Payroll Report (Admin Drawer) */}
+                  {(() => {
+                    const totalSchHours = allAdminShifts.reduce((sum, s) => sum + s.hours, 0);
+                    const totalValHours = allAdminShifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
+                    const payDetails = allAdminShifts.reduce((acc, shift) => {
+                      const staff = allAdminStaff.find(s => s.id === shift.staffId);
+                      const rate = staff ? staff.hourlyRate : 15.00;
+                      const pay = shift.hours * rate;
+                      if (shift.validated) {
+                        acc.validatedPay += pay;
+                      } else {
+                        acc.pendingPay += pay;
+                      }
+                      return acc;
+                    }, { validatedPay: 0, pendingPay: 0 });
+                    const totPayroll = payDetails.validatedPay + payDetails.pendingPay;
+
+                    return (
+                      <div className="bg-slate-955 border border-slate-850 p-4 space-y-3 font-mono text-xs">
+                        <div className="flex items-center gap-2 border-b border-slate-800 pb-2 text-slate-200">
+                          <PoundSterling className="w-4 h-4 text-brand-blue" />
+                          <span className="font-bold uppercase tracking-wider">Payroll Report (GBP)</span>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-slate-400">
+                            <span className="text-slate-500 font-bold uppercase">Scheduled</span>
+                            <span className="font-extrabold">{totalSchHours.toFixed(1)} hrs</span>
+                          </div>
+                          <div className="flex justify-between text-slate-400">
+                            <span className="text-slate-500 font-bold uppercase">Validated</span>
+                            <span className="text-brand-blue font-extrabold">{totalValHours.toFixed(1)} hrs</span>
+                          </div>
+                          <div className="flex justify-between border-t border-slate-850 pt-2 text-slate-355">
+                            <span className="text-slate-500 font-bold uppercase">Total Est. Pay</span>
+                            <span className="text-brand-yellow font-extrabold">£{totPayroll.toFixed(2)}</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1 text-[11px] border-t border-slate-850 pt-2 text-slate-500 font-medium">
+                          <div className="flex justify-between">
+                            <span>Verified Pay:</span>
+                            <span className="text-emerald-500 font-bold">£{payDetails.validatedPay.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Pending Pay:</span>
+                            <span className="text-rose-450 font-bold">£{payDetails.pendingPay.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
 
             </div>
 
             {/* Footer indicator */}
-            <div className="font-mono text-xs text-slate-605 border-t border-slate-850 pt-4">
-              <span>itsmysite edge v4.0.0</span>
+            <div className="font-mono text-xs text-slate-600 border-t border-slate-850 pt-4">
+              <span>itsmysite PWA engine v4.0</span>
             </div>
           </div>
         </div>
