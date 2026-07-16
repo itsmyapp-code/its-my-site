@@ -96,6 +96,8 @@ export interface Briefing {
   content: string;
   timestamp: string;
   active: boolean;
+  targetType?: "all" | "staff";
+  targetIds?: string[];
 }
 
 export interface BriefingReceipt {

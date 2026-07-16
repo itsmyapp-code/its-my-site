@@ -112,7 +112,17 @@ export default function Home() {
   const [allAdminStaff, setAllAdminStaff] = useState<Staff[]>([]);
 
   const unreadBriefing = role === "worker" && selectedStaffId
-    ? briefings.find(b => b.active && !briefingReceipts.some(r => r.briefingId === b.id && r.staffId === selectedStaffId))
+    ? briefings.find(b => {
+        if (!b.active) return false;
+        const alreadyRead = briefingReceipts.some(r => r.briefingId === b.id && r.staffId === selectedStaffId);
+        if (alreadyRead) return false;
+
+        // Check if targeted to specific employees
+        if (b.targetType === "staff") {
+          return b.targetIds?.includes(selectedStaffId) || false;
+        }
+        return true; // Targeted to everyone
+      })
     : null;
 
   // Fetch metrics and audit logs
@@ -665,6 +675,8 @@ export default function Home() {
   // --- ADMIN BRIEFINGS ACTIONS ---
   const [newBriefingTopic, setNewBriefingTopic] = useState("");
   const [newBriefingContent, setNewBriefingContent] = useState("");
+  const [briefingTargetType, setBriefingTargetType] = useState<"all" | "staff">("all");
+  const [briefingTargetStaffId, setBriefingTargetStaffId] = useState<string>("");
   const [briefingSubmitting, setBriefingSubmitting] = useState(false);
   const [expandedBriefingId, setExpandedBriefingId] = useState<string | null>(null);
 
@@ -681,21 +693,35 @@ export default function Home() {
       alert("Please enter talk content.");
       return;
     }
+    if (briefingTargetType === "staff" && !briefingTargetStaffId) {
+      alert("Please select the target employee.");
+      return;
+    }
     setBriefingSubmitting(true);
     try {
+      const targetIds = briefingTargetType === "staff" ? [briefingTargetStaffId] : [];
       await dbAddBriefing(uid, {
         topic: newBriefingTopic,
         content: newBriefingContent,
-        active: true
+        active: true,
+        targetType: briefingTargetType,
+        targetIds
       });
+      
+      const targetDesc = briefingTargetType === "staff" 
+        ? `targeted to worker ID: ${briefingTargetStaffId}`
+        : "targeted to Everyone";
+
       await dbAddAuditLog(
         uid,
         "BRIEFING_CREATED",
-        `Admin published mandatory H&S Briefing (Toolbox Talk) on topic: "${newBriefingTopic}"`
+        `Admin published mandatory H&S Briefing (Toolbox Talk) on topic: "${newBriefingTopic}" (${targetDesc})`
       );
       alert("Briefing talk published successfully!");
       setNewBriefingTopic("");
       setNewBriefingContent("");
+      setBriefingTargetType("all");
+      setBriefingTargetStaffId("");
       fetchDashboardData();
     } catch (err: any) {
       alert(`Error publishing briefing: ${err.message || err}`);
@@ -1387,6 +1413,37 @@ export default function Home() {
                             />
                           </div>
 
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            <div>
+                              <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Target Audience</label>
+                              <select
+                                value={briefingTargetType}
+                                onChange={(e) => setBriefingTargetType(e.target.value as "all" | "staff")}
+                                className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-xs font-bold font-mono"
+                              >
+                                <option value="all">Everyone (All Workers)</option>
+                                <option value="staff">Specific Employee</option>
+                              </select>
+                            </div>
+
+                            {briefingTargetType === "staff" && (
+                              <div>
+                                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Select Target Worker</label>
+                                <select
+                                  value={briefingTargetStaffId}
+                                  onChange={(e) => setBriefingTargetStaffId(e.target.value)}
+                                  className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-xs font-bold font-mono"
+                                  required
+                                >
+                                  <option value="">-- Select Worker --</option>
+                                  {allAdminStaff.map(w => (
+                                    <option key={w.id} value={w.id}>{w.name} ({w.email})</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
+
                           <div>
                             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Briefing / Talk Content</label>
                             <textarea
@@ -1428,7 +1485,10 @@ export default function Home() {
                             {briefings.map(b => {
                               const receiptsForTalk = briefingReceipts.filter(r => r.briefingId === b.id);
                               const ackCount = receiptsForTalk.length;
-                              const totalWorkers = allAdminStaff.length;
+                              const targetWorkers = b.targetType === "staff"
+                                ? allAdminStaff.filter(w => b.targetIds?.includes(w.id))
+                                : allAdminStaff;
+                              const totalWorkers = targetWorkers.length;
                               const isExpanded = expandedBriefingId === b.id;
 
                               return (
@@ -1436,12 +1496,18 @@ export default function Home() {
                                   <div className="flex justify-between items-center">
                                     <div>
                                       <span className="font-extrabold text-brand-yellow text-sm block">{b.topic}</span>
-                                      <span className="text-[10px] text-slate-500 block">Published: {new Date(b.timestamp).toLocaleString("en-GB")}</span>
+                                      <div className="flex flex-wrap gap-2 text-[10px] text-slate-500 mt-0.5">
+                                        <span>Sent: {new Date(b.timestamp).toLocaleString("en-GB")}</span>
+                                        <span>|</span>
+                                        <span className="text-brand-blue font-extrabold uppercase">
+                                          Target: {b.targetType === "staff" ? `Employee (${targetWorkers.map(w => w.name).join(", ")})` : "Everyone"}
+                                        </span>
+                                      </div>
                                     </div>
                                     <button
                                       type="button"
                                       onClick={() => setExpandedBriefingId(isExpanded ? null : b.id)}
-                                      className="px-3 py-1 bg-slate-900 border border-slate-800 text-slate-350 hover:text-slate-200 text-[10px] font-bold uppercase cursor-pointer"
+                                      className="px-3 py-1 bg-slate-900 border border-slate-800 text-slate-355 hover:text-slate-200 text-[10px] font-bold uppercase cursor-pointer whitespace-nowrap"
                                     >
                                       {isExpanded ? "Collapse" : `View Receipts (${ackCount}/${totalWorkers})`}
                                     </button>
@@ -1462,7 +1528,7 @@ export default function Home() {
                                             </tr>
                                           </thead>
                                           <tbody className="divide-y divide-slate-850 font-semibold text-slate-300">
-                                            {allAdminStaff.map(worker => {
+                                            {targetWorkers.map(worker => {
                                               const receipt = receiptsForTalk.find(r => r.staffId === worker.id);
                                               return (
                                                 <tr key={worker.id} className="hover:bg-slate-900/50">
