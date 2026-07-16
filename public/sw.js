@@ -1,4 +1,4 @@
-const CACHE_NAME = "itsmysite-cache-v1";
+const CACHE_NAME = "itsmysite-cache-v2";
 const ASSETS_TO_CACHE = [
   "/",
   "/site.webmanifest",
@@ -48,6 +48,30 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  const isHTML = event.request.headers.get("accept")?.includes("text/html") || 
+                 event.request.url === self.location.origin + "/";
+
+  // NETWORK FIRST strategy for HTML pages/root to prevent stale cache displays
+  if (isHTML) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200 && response.type === "basic") {
+            const responseToCache = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cached) => cached || caches.match("/"));
+        })
+    );
+    return;
+  }
+
+  // CACHE FIRST strategy for static assets
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
