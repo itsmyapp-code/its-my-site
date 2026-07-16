@@ -635,6 +635,43 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                       <div className="text-xs font-semibold text-slate-450">
                         Date: <span className="text-slate-200">{formatUKDate(shift.date)}</span> | Start: <span className="text-slate-200">{shift.startTime}</span> | Rate: <span className="text-slate-200">£{rate.toFixed(2)}/hr</span>
                       </div>
+
+                      {(shift.clockInTime || shift.clockOutTime) && (
+                        <div className="text-[11px] font-mono text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                          {shift.clockInTime && (
+                            <span className="flex items-center gap-1">
+                              📥 <span className="text-slate-500">In:</span> <strong className="text-emerald-450">{shift.clockInTime}</strong>
+                              {shift.clockInCoordinates && (
+                                <a 
+                                  href={`https://www.google.com/maps/search/?api=1&query=${shift.clockInCoordinates.lat},${shift.clockInCoordinates.lng}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] text-slate-500 hover:text-brand-blue underline"
+                                  title="View clock-in location"
+                                >
+                                  ({shift.clockInCoordinates.lat.toFixed(4)}, {shift.clockInCoordinates.lng.toFixed(4)})
+                                </a>
+                              )}
+                            </span>
+                          )}
+                          {shift.clockOutTime && (
+                            <span className="flex items-center gap-1">
+                              📤 <span className="text-slate-500">Out:</span> <strong className="text-brand-yellow">{shift.clockOutTime}</strong>
+                              {shift.clockOutCoordinates && (
+                                <a 
+                                  href={`https://www.google.com/maps/search/?api=1&query=${shift.clockOutCoordinates.lat},${shift.clockOutCoordinates.lng}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] text-slate-500 hover:text-brand-blue underline"
+                                  title="View clock-out location"
+                                >
+                                  ({shift.clockOutCoordinates.lat.toFixed(4)}, {shift.clockOutCoordinates.lng.toFixed(4)})
+                                </a>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-4 w-full sm:w-auto shrink-0 justify-between sm:justify-end border-t border-slate-900 sm:border-t-0 pt-3 sm:pt-0">

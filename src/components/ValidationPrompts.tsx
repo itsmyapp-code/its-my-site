@@ -118,8 +118,7 @@ export function ValidationPrompts({ uid, role, onOpenValidation, activePrompt, s
           <span>ACTION REQUIRED: SHIFT VALIDATION PROMPT</span>
         </div>
         <p className="text-sm leading-relaxed text-slate-200 font-semibold">
-          Under UK GDPR guidelines, we do not monitor your position continuously. 
-          Please manually verify you are on-site now.
+          Verify you are on site.
         </p>
         <div className="flex gap-3">
           <button
@@ -162,8 +161,7 @@ export function ValidationPrompts({ uid, role, onOpenValidation, activePrompt, s
             <span>ACTION REQUIRED: SHIFT VALIDATION PROMPT</span>
           </div>
           <p className="text-sm leading-relaxed text-slate-200 font-semibold">
-            A scheduled check-in window has opened. Under UK GDPR guidelines, we do not monitor your position continuously. 
-            Please manually verify you are on-site now.
+            Verify you are on site.
           </p>
           <div className="flex gap-3">
             <button

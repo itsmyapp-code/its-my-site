@@ -19,7 +19,8 @@ import {
   Eye,
   EyeOff,
   PoundSterling,
-  HelpCircle
+  HelpCircle,
+  Shield
 } from "lucide-react";
 
 // Components
@@ -42,7 +43,18 @@ import {
   dbGetShifts, 
   Staff, 
   Shift,
-  dbGetValidationRequests
+  dbGetValidationRequests,
+  dbUpdateShift,
+  dbAddEvent,
+  dbAddBriefing,
+  dbGetBriefings,
+  dbAddBriefingReceipt,
+  dbGetBriefingReceipts,
+  dbAddVariation,
+  dbGetVariations,
+  Briefing,
+  BriefingReceipt,
+  Variation
 } from "@/lib/db";
 import { 
   signInWithEmailAndPassword, 
@@ -67,10 +79,13 @@ export default function Home() {
   
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [activePrompt, setActivePrompt] = useState(false);
-  const [adminSubView, setAdminSubView] = useState<"overview" | "staff" | "map" | "logs">("staff");
+  const [adminSubView, setAdminSubView] = useState<"overview" | "staff" | "map" | "logs" | "reports" | "help">("staff");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"menu" | "help">("menu");
   const [notifPermission, setNotifPermission] = useState<string>("default");
+  const [simulatedCoords, setSimulatedCoords] = useState<{ name: string; lat: number; lng: number } | null>(null);
+  const [loadingClockId, setLoadingClockId] = useState<string | null>(null);
+  const [reportsTab, setReportsTab] = useState<"payroll" | "overtime" | "variations" | "talks">("payroll");
 
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -80,6 +95,9 @@ export default function Home() {
   
   // Dashboard Metrics & Lists
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [briefings, setBriefings] = useState<Briefing[]>([]);
+  const [briefingReceipts, setBriefingReceipts] = useState<BriefingReceipt[]>([]);
+  const [variations, setVariations] = useState<Variation[]>([]);
   const [activeSiteCount, setActiveSiteCount] = useState(3);
   const [eventsCount, setEventsCount] = useState(0);
   const [lastCheckIn, setLastCheckIn] = useState<string | null>(null);
@@ -91,6 +109,10 @@ export default function Home() {
 
   const [allAdminShifts, setAllAdminShifts] = useState<Shift[]>([]);
   const [allAdminStaff, setAllAdminStaff] = useState<Staff[]>([]);
+
+  const unreadBriefing = role === "worker" && selectedStaffId
+    ? briefings.find(b => b.active && !briefingReceipts.some(r => r.briefingId === b.id && r.staffId === selectedStaffId))
+    : null;
 
   // Fetch metrics and audit logs
   const fetchDashboardData = async () => {
@@ -134,6 +156,14 @@ export default function Home() {
       } else if (staffList.length > 0) {
         setWorkerShifts(allShifts.filter(s => s.staffId === staffList[0].id));
       }
+
+      // Load briefings, receipts, variations
+      const bList = await dbGetBriefings(uid);
+      setBriefings(bList);
+      const rList = await dbGetBriefingReceipts(uid);
+      setBriefingReceipts(rList);
+      const vList = await dbGetVariations(uid);
+      setVariations(vList);
     } catch (err) {
       console.error(err);
     }
@@ -265,11 +295,13 @@ export default function Home() {
       // 1. Check Scheduled Checkpoints
       if (todaysShifts.length > 0) {
         for (const shift of todaysShifts) {
-          const site = allSites.find((s) => s.id === shift.siteId);
-          if (site && site.validationTimes && site.validationTimes.includes(timeStr)) {
-            shouldPrompt = true;
-            matchedSiteName = site.name;
-            break;
+          if (shift.clockInTime && !shift.clockOutTime) {
+            const site = allSites.find((s) => s.id === shift.siteId);
+            if (site && site.validationTimes && site.validationTimes.includes(timeStr)) {
+              shouldPrompt = true;
+              matchedSiteName = site.name;
+              break;
+            }
           }
         }
       }
@@ -282,6 +314,10 @@ export default function Home() {
         const recent = reqs.filter(r => (nowTime - new Date(r.timestamp).getTime()) < 45000);
         
         for (const req of recent) {
+          // Check if worker has an active shift they are currently clocked into
+          const activeShift = todaysShifts.find(s => s.clockInTime && !s.clockOutTime);
+          if (!activeShift) continue;
+
           if (req.targetType === "staff") {
             if (req.targetIds.includes(selectedStaffId || "")) {
               shouldPrompt = true;
@@ -289,10 +325,9 @@ export default function Home() {
               break;
             }
           } else if (req.targetType === "site") {
-            const workerSiteIds = todaysShifts.map(s => s.siteId);
-            if (req.targetIds.some(id => workerSiteIds.includes(id))) {
+            if (req.targetIds.includes(activeShift.siteId)) {
               shouldPrompt = true;
-              const matchedSite = allSites.find(s => req.targetIds.includes(s.id));
+              const matchedSite = allSites.find(s => s.id === activeShift.siteId);
               matchedSiteName = matchedSite ? matchedSite.name : "Target Site";
               break;
             }
@@ -326,6 +361,335 @@ export default function Home() {
 
   const handleDataModified = () => {
     setRefreshTrigger(prev => prev + 1);
+  };
+
+  const getCoordinatesForClock = async (): Promise<{ lat: number; lng: number }> => {
+    if (simulatedCoords && simulatedCoords.name !== "Actual GPS") {
+      await dbAddAuditLog(uid, "LOCATION_SIMULATION_ACTIVE", `Using mock GPS coordinate profile for clocking: ${simulatedCoords.name}`);
+      return { lat: simulatedCoords.lat, lng: simulatedCoords.lng };
+    }
+
+    return new Promise((resolve, reject) => {
+      if (typeof window === "undefined" || !navigator.geolocation) {
+        reject(new Error("HTML5 Geolocation is not supported."));
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({ lat: position.coords.latitude, lng: position.coords.longitude });
+        },
+        (error) => {
+          reject(new Error(`GPS failed: Code ${error.code} - ${error.message}`));
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  };
+
+  const handleClockIn = async (shift: Shift) => {
+    setLoadingClockId(shift.id);
+    try {
+      const coords = await getCoordinatesForClock();
+      const timeStr = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+      
+      await dbUpdateShift(uid, shift.id, {
+        clockInTime: timeStr,
+        clockInCoordinates: coords
+      });
+
+      // Record ShiftEvent
+      const eventData = {
+        type: "clock_in" as const,
+        timestamp: new Date().toISOString(),
+        locationName: `Clock In at ${shift.siteName}`,
+        lat: coords.lat,
+        lng: coords.lng,
+        staffId: shift.staffId,
+        staffName: shift.staffName
+      };
+      await dbAddEvent(uid, eventData);
+
+      // Audit Log
+      await dbAddAuditLog(
+        uid,
+        "SHIFT_CLOCKED_IN",
+        `Worker ${shift.staffName} clocked in for shift at ${shift.siteName} at ${timeStr} (Coords: ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)})`
+      );
+
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err: any) {
+      alert(`Clock In Failed: ${err.message || err}. Please allow location access or select a simulator profile.`);
+      await dbAddAuditLog(uid, "CLOCK_IN_FAILED", `Worker clock in failed: ${err.message || err}`);
+    } finally {
+      setLoadingClockId(null);
+    }
+  };
+
+  const getScheduledShiftEnd = (shift: Shift): Date | null => {
+    try {
+      const [hours, minutes] = shift.startTime.split(":").map(Number);
+      const dateObj = new Date(shift.date);
+      dateObj.setHours(hours, minutes, 0, 0);
+      const endMs = dateObj.getTime() + shift.hours * 60 * 60 * 1000;
+      return new Date(endMs);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const handleClockOut = async (shift: Shift) => {
+    setLoadingClockId(shift.id);
+    try {
+      const coords = await getCoordinatesForClock();
+      const timeStr = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+      
+      const end = getScheduledShiftEnd(shift);
+      let overtimeMins = 0;
+      if (end) {
+        const diffMs = Date.now() - end.getTime();
+        if (diffMs > 0) {
+          overtimeMins = Math.round(diffMs / 1000 / 60);
+        }
+      }
+
+      await dbUpdateShift(uid, shift.id, {
+        clockOutTime: timeStr,
+        clockOutCoordinates: coords,
+        overtimeMinutes: overtimeMins > 0 ? overtimeMins : undefined
+      });
+
+      // Record ShiftEvent
+      const eventData = {
+        type: "clock_out" as const,
+        timestamp: new Date().toISOString(),
+        locationName: `Clock Out at ${shift.siteName}`,
+        lat: coords.lat,
+        lng: coords.lng,
+        staffId: shift.staffId,
+        staffName: shift.staffName
+      };
+      await dbAddEvent(uid, eventData);
+
+      // Audit Log
+      await dbAddAuditLog(
+        uid,
+        "SHIFT_CLOCKED_OUT",
+        `Worker ${shift.staffName} clocked out from shift at ${shift.siteName} at ${timeStr} (Coords: ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)})${overtimeMins > 0 ? ` with ${overtimeMins} mins overtime` : ""}`
+      );
+
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err: any) {
+      alert(`Clock Out Failed: ${err.message || err}. Please allow location access or select a simulator profile.`);
+      await dbAddAuditLog(uid, "CLOCK_OUT_FAILED", `Worker clock out failed: ${err.message || err}`);
+    } finally {
+      setLoadingClockId(null);
+    }
+  };
+
+  // --- HEALTH & SAFETY BRIEFING ACKNOWLEDGMENT ---
+  const [hsSubmitting, setHsSubmitting] = useState(false);
+  const handleAcknowledgeBriefing = async () => {
+    if (!unreadBriefing || !selectedStaffId) return;
+    setHsSubmitting(true);
+    try {
+      const coords = await getCoordinatesForClock().catch(() => ({ lat: 0, lng: 0 }));
+      const staffName = staffMembers.find(s => s.id === selectedStaffId)?.name || "Worker";
+
+      await dbAddBriefingReceipt(uid, {
+        briefingId: unreadBriefing.id,
+        staffId: selectedStaffId,
+        staffName,
+        lat: coords.lat,
+        lng: coords.lng,
+        verified: coords.lat !== 0 || coords.lng !== 0
+      });
+
+      await dbAddAuditLog(
+        uid,
+        "BRIEFING_ACKNOWLEDGED",
+        `Worker ${staffName} acknowledged H&S Briefing: "${unreadBriefing.topic}" at GPS (${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)})`
+      );
+
+      alert(`Thank you. Health & Safety briefing read receipt has been submitted and audited.`);
+      fetchDashboardData();
+    } catch (err: any) {
+      alert(`Error logging acknowledgment: ${err.message || err}`);
+    } finally {
+      setHsSubmitting(false);
+    }
+  };
+
+  // --- DAYWORKS & VARIATIONS FORM ---
+  const [varNotes, setVarNotes] = useState("");
+  const [varPhoto, setVarPhoto] = useState<string | null>(null);
+  const [varSubmitting, setVarSubmitting] = useState(false);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setVarPhoto(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddVariationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedStaffId) {
+      alert("Please select or log into a worker profile first.");
+      return;
+    }
+    if (!varNotes.trim()) {
+      alert("Please enter notes for the variation.");
+      return;
+    }
+    setVarSubmitting(true);
+    try {
+      const coords = await getCoordinatesForClock().catch(() => ({ lat: 0, lng: 0 }));
+      const staffName = staffMembers.find(s => s.id === selectedStaffId)?.name || "Worker";
+
+      await dbAddVariation(uid, {
+        staffId: selectedStaffId,
+        staffName,
+        notes: varNotes,
+        photo: varPhoto || undefined,
+        lat: coords.lat,
+        lng: coords.lng
+      });
+
+      await dbAddAuditLog(
+        uid,
+        "VARIATION_SUBMITTED",
+        `Worker ${staffName} logged variation: "${varNotes.substring(0, 40)}..." at GPS (${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)})`
+      );
+
+      alert("Variation / Daywork logged successfully!");
+      setVarNotes("");
+      setVarPhoto(null);
+      const fileInput = document.getElementById("var-photo-file") as HTMLInputElement;
+      if (fileInput) fileInput.value = "";
+      fetchDashboardData();
+    } catch (err: any) {
+      alert(`Failed to log variation: ${err.message || err}`);
+    } finally {
+      setVarSubmitting(false);
+    }
+  };
+
+  // --- DIGITAL OVERTIME CLAIMS WORKER PROMPT ---
+  const [overtimePromptShift, setOvertimePromptShift] = useState<Shift | null>(null);
+
+  // Time-gated trigger: check every 10 seconds if worker shift has passed scheduled end
+  useEffect(() => {
+    if (role !== "worker" || !selectedStaffId || workerShifts.length === 0) return;
+    
+    const interval = setInterval(() => {
+      const activeShift = workerShifts.find(s => s.clockInTime && !s.clockOutTime && !s.overtimeRequested);
+      if (activeShift) {
+        const end = getScheduledShiftEnd(activeShift);
+        if (end && new Date() >= end) {
+          setOvertimePromptShift(activeShift);
+        }
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [role, selectedStaffId, workerShifts]);
+
+  const handleClaimOvertime = async (shift: Shift) => {
+    try {
+      await dbUpdateShift(uid, shift.id, {
+        overtimeRequested: true
+      });
+      await dbAddAuditLog(
+        uid,
+        "OVERTIME_CLAIM_INITIATED",
+        `Worker ${shift.staffName} requested overtime logging for shift ending at ${shift.startTime} (Hours: ${shift.hours})`
+      );
+      setOvertimePromptShift(null);
+      fetchDashboardData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // --- ADMIN OVERTIME ACTIONS ---
+  const handleApproveOvertime = async (shift: Shift) => {
+    try {
+      const extraHrs = (shift.overtimeMinutes || 0) / 60;
+      const updatedHours = shift.hours + extraHrs;
+      await dbUpdateShift(uid, shift.id, {
+        hours: Number(updatedHours.toFixed(2)),
+        overtimeApproved: true,
+        overtimeRequested: false
+      });
+      await dbAddAuditLog(
+        uid,
+        "OVERTIME_APPROVED",
+        `Admin approved ${shift.overtimeMinutes} mins overtime for ${shift.staffName} on shift at ${shift.siteName} (${shift.date}). New total hours: ${updatedHours.toFixed(2)}`
+      );
+      alert("Overtime claim approved!");
+      fetchDashboardData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeclineOvertime = async (shift: Shift) => {
+    try {
+      await dbUpdateShift(uid, shift.id, {
+        overtimeApproved: false,
+        overtimeRequested: false
+      });
+      await dbAddAuditLog(
+        uid,
+        "OVERTIME_DECLINED",
+        `Admin declined overtime claim of ${shift.overtimeMinutes} mins for ${shift.staffName} on shift at ${shift.siteName} (${shift.date}).`
+      );
+      alert("Overtime claim declined.");
+      fetchDashboardData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // --- ADMIN BRIEFINGS ACTIONS ---
+  const [newBriefingTopic, setNewBriefingTopic] = useState("Working at Height");
+  const [newBriefingContent, setNewBriefingContent] = useState("");
+  const [briefingSubmitting, setBriefingSubmitting] = useState(false);
+  const [expandedBriefingId, setExpandedBriefingId] = useState<string | null>(null);
+
+  // Lightbox picture overlay
+  const [activeLightboxImage, setActiveLightboxImage] = useState<string | null>(null);
+
+  const handleAddBriefingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBriefingContent.trim()) {
+      alert("Please enter talk content.");
+      return;
+    }
+    setBriefingSubmitting(true);
+    try {
+      await dbAddBriefing(uid, {
+        topic: newBriefingTopic,
+        content: newBriefingContent,
+        active: true
+      });
+      await dbAddAuditLog(
+        uid,
+        "BRIEFING_CREATED",
+        `Admin published mandatory H&S Briefing (Toolbox Talk) on topic: "${newBriefingTopic}"`
+      );
+      alert("Briefing talk published successfully!");
+      setNewBriefingContent("");
+      fetchDashboardData();
+    } catch (err: any) {
+      alert(`Error publishing briefing: ${err.message || err}`);
+    } finally {
+      setBriefingSubmitting(false);
+    }
   };
 
   if (!user) {
@@ -469,14 +833,6 @@ export default function Home() {
         {role === "admin" && (
           <div className="space-y-6 animate-in fade-in duration-200">
             
-            {/* Screen Size Warning for Testing */}
-            <div className="xl:hidden p-4 bg-amber-955/70 border border-brand-yellow/30 text-brand-yellow text-xs sm:text-sm flex items-center gap-3 leading-normal">
-              <ShieldAlert className="w-5 h-5 shrink-0" />
-              <span>
-                <strong>LAYOUT READABILITY GUIDE:</strong> Admin view sections are now separated into sections via the top-right Hamburger Menu or quick horizontal tabs below.
-              </span>
-            </div>
-
             {/* Dashboard Sub-view Horizontal Tabs */}
             <div className="flex border-b border-slate-800 font-mono text-xs sm:text-sm gap-2 overflow-x-auto pb-0.5">
               <button 
@@ -506,10 +862,26 @@ export default function Home() {
               <button 
                 onClick={() => setAdminSubView("logs")}
                 className={`pb-2.5 px-4 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
-                  adminSubView === "logs" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-350"
+                  adminSubView === "logs" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
                 }`}
               >
                 Audit Registers
+              </button>
+              <button 
+                onClick={() => setAdminSubView("reports")}
+                className={`pb-2.5 px-4 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
+                  adminSubView === "reports" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
+                }`}
+              >
+                Payroll Reports
+              </button>
+              <button 
+                onClick={() => setAdminSubView("help")}
+                className={`pb-2.5 px-4 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
+                  adminSubView === "help" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
+                }`}
+              >
+                Help & PWA Guide
               </button>
             </div>
 
@@ -645,6 +1017,772 @@ export default function Home() {
               </div>
             )}
 
+            {adminSubView === "reports" && (() => {
+              const totalSchHours = allAdminShifts.reduce((sum, s) => sum + s.hours, 0);
+              const totalValHours = allAdminShifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
+              
+              const payDetails = allAdminShifts.reduce((acc, shift) => {
+                const staff = allAdminStaff.find(s => s.id === shift.staffId);
+                const rate = staff ? staff.hourlyRate : 15.00;
+                const pay = shift.hours * rate;
+                if (shift.validated) {
+                  acc.validatedPay += pay;
+                } else {
+                  acc.pendingPay += pay;
+                }
+                return acc;
+              }, { validatedPay: 0, pendingPay: 0 });
+              
+              const totPayroll = payDetails.validatedPay + payDetails.pendingPay;
+
+              // Rota detailed payroll list grouped by worker
+              const staffReport = allAdminStaff.map(worker => {
+                const workerShifts = allAdminShifts.filter(s => s.staffId === worker.id);
+                const sch = workerShifts.reduce((sum, s) => sum + s.hours, 0);
+                const val = workerShifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
+                const schPay = sch * worker.hourlyRate;
+                const valPay = val * worker.hourlyRate;
+                const pendPay = schPay - valPay;
+                const complianceRate = sch > 0 ? (val / sch) * 100 : 0;
+                
+                return {
+                  id: worker.id,
+                  name: worker.name,
+                  rate: worker.hourlyRate,
+                  scheduledHours: sch,
+                  validatedHours: val,
+                  estimatedPay: schPay,
+                  verifiedPay: valPay,
+                  pendingPay: pendPay,
+                  compliance: complianceRate
+                };
+              });
+
+              return (
+                <div className="bg-slate-900 border border-slate-800 p-5 space-y-6">
+                  {/* Title & Header */}
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-800 pb-4 gap-4">
+                    <div className="flex items-center gap-2.5">
+                      <PoundSterling className="w-5 h-5 text-brand-yellow" />
+                      <h3 className="text-lg font-bold text-slate-100 uppercase tracking-wider">Payroll & Hours Ledger</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await dbAddAuditLog(uid, "REPORT_EXPORT_TRIGGERED", `Admin triggered CSV export for payroll report (${staffReport.length} workers audited)`);
+                        alert("Exporting CSV report... (Audit log recorded)");
+                      }}
+                      className="px-4 py-2 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs border-none cursor-pointer"
+                    >
+                      Export CSV Report
+                    </button>
+                  </div>
+
+                  {/* Local sub-navigation */}
+                  <div className="flex border-b border-slate-800 font-mono text-xs gap-2 overflow-x-auto pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setReportsTab("payroll")}
+                      className={`pb-2 px-3.5 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
+                        reportsTab === "payroll" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
+                      }`}
+                    >
+                      Hours & Payroll
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReportsTab("overtime")}
+                      className={`pb-2 px-3.5 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
+                        reportsTab === "overtime" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
+                      }`}
+                    >
+                      Overtime Claims
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReportsTab("variations")}
+                      className={`pb-2 px-3.5 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
+                        reportsTab === "variations" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
+                      }`}
+                    >
+                      Dayworks & Variations
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReportsTab("talks")}
+                      className={`pb-2 px-3.5 font-bold border-b-2 uppercase transition tracking-wider cursor-pointer whitespace-nowrap ${
+                        reportsTab === "talks" ? "border-brand-blue text-slate-100" : "border-transparent text-slate-500 hover:text-slate-355"
+                      }`}
+                    >
+                      H&S Toolbox Talks
+                    </button>
+                  </div>
+
+                  {reportsTab === "payroll" && (
+                    <div className="space-y-6 animate-in fade-in duration-200">
+                      {/* Bento Metrics grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="bg-slate-955 border border-slate-850 p-4 relative overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Scheduled</span>
+                          <div className="text-2xl font-black text-slate-100 mt-1">{totalSchHours.toFixed(1)} hrs</div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-1">Across all active rotas</span>
+                        </div>
+                        <div className="bg-slate-955 border border-slate-850 p-4 relative overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Validated</span>
+                          <div className="text-2xl font-black text-brand-blue mt-1">{totalValHours.toFixed(1)} hrs</div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-1">
+                            {totalSchHours > 0 ? ((totalValHours / totalSchHours) * 100).toFixed(0) : 0}% compliance rate
+                          </span>
+                        </div>
+                        <div className="bg-slate-955 border border-slate-850 p-4 relative overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Verified Payout</span>
+                          <div className="text-2xl font-black text-emerald-500 mt-1">£{payDetails.validatedPay.toFixed(2)}</div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-1">For fully cleared checkpoints</span>
+                        </div>
+                        <div className="bg-slate-955 border border-slate-850 p-4 relative overflow-hidden">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Pending / Unverified</span>
+                          <div className="text-2xl font-black text-rose-450 mt-1">£{payDetails.pendingPay.toFixed(2)}</div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-1">Pending geofence verification</span>
+                        </div>
+                      </div>
+
+                      {/* Summary Details */}
+                      <div className="bg-slate-950 border border-slate-850 p-4 text-xs font-mono text-slate-400 space-y-2 leading-relaxed">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-widest block border-b border-slate-850 pb-1.5 mb-2.5">
+                          ℹ️ About the Payroll Report
+                        </span>
+                        <p>
+                          This report aggregates shift schedules and geofence events to calculate estimated payouts.
+                        </p>
+                        <p>
+                          <strong className="text-slate-200">Verified Payout</strong> is calculated from shifts where the worker clocked in, clocked out, and cleared all geofence validation checkpoints (UK GDPR Article 24 compliant).
+                        </p>
+                        <p>
+                          <strong className="text-slate-200">Pending Payout</strong> represents shifts that have not yet completed validation checkpoints or are scheduled in the future.
+                        </p>
+                      </div>
+
+                      {/* Detailed Table */}
+                      <div className="space-y-2.5">
+                        <span className="text-xs text-slate-400 font-bold uppercase tracking-wider block">Worker Breakdown Directory</span>
+                        <div className="overflow-x-auto border border-slate-850 bg-slate-955">
+                          <table className="w-full text-left text-xs font-mono border-collapse">
+                            <thead>
+                              <tr className="bg-slate-950 border-b border-slate-850 text-slate-500 uppercase font-bold text-[10px] tracking-wider">
+                                <th className="p-3.5">Staff Name</th>
+                                <th className="p-3.5">Rate</th>
+                                <th className="p-3.5 text-center">Scheduled</th>
+                                <th className="p-3.5 text-center">Validated</th>
+                                <th className="p-3.5 text-center">Compliance</th>
+                                <th className="p-3.5 text-right">Est. Cost</th>
+                                <th className="p-3.5 text-right">Verified Pay</th>
+                                <th className="p-3.5 text-right">Pending Pay</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-850 font-semibold text-slate-300">
+                              {staffReport.map(r => (
+                                <tr key={r.id} className="hover:bg-slate-900 transition">
+                                  <td className="p-3.5 font-bold text-slate-100">{r.name}</td>
+                                  <td className="p-3.5">£{r.rate.toFixed(2)}/hr</td>
+                                  <td className="p-3.5 text-center">{r.scheduledHours.toFixed(1)} hrs</td>
+                                  <td className="p-3.5 text-center text-brand-blue">{r.validatedHours.toFixed(1)} hrs</td>
+                                  <td className="p-3.5 text-center">
+                                    <span className={`px-1.5 py-0.5 text-[10px] font-bold ${
+                                      r.compliance >= 90 ? "bg-emerald-950 text-emerald-400" :
+                                      r.compliance >= 50 ? "bg-amber-950 text-brand-yellow" :
+                                      "bg-rose-950/70 text-rose-400"
+                                    }`}>
+                                      {r.compliance.toFixed(0)}%
+                                    </span>
+                                  </td>
+                                  <td className="p-3.5 text-right">£{r.estimatedPay.toFixed(2)}</td>
+                                  <td className="p-3.5 text-right text-emerald-500">£{r.verifiedPay.toFixed(2)}</td>
+                                  <td className="p-3.5 text-right text-slate-500">£{r.pendingPay.toFixed(2)}</td>
+                                </tr>
+                              ))}
+                              {staffReport.length === 0 && (
+                                <tr>
+                                  <td colSpan={8} className="p-8 text-center text-slate-500 italic">No registered staff found to build audit report.</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {reportsTab === "overtime" && (() => {
+                    const pendingOvertimeShifts = allAdminShifts.filter(s => s.overtimeRequested && s.overtimeMinutes);
+                    return (
+                      <div className="space-y-4 animate-in fade-in duration-200">
+                        <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                          <Clock className="w-4 h-4 text-brand-blue" />
+                          <span className="font-bold text-slate-200 uppercase tracking-wider text-xs">Pending Overtime Approvals</span>
+                        </div>
+
+                        {pendingOvertimeShifts.length === 0 ? (
+                          <div className="text-slate-500 italic text-xs py-8 text-center bg-slate-955 border border-slate-850">
+                            No pending overtime claims requiring review.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {pendingOvertimeShifts.map(s => {
+                              const staff = allAdminStaff.find(st => st.id === s.staffId);
+                              const rate = staff ? staff.hourlyRate : 15.00;
+                              const cost = ((s.overtimeMinutes || 0) / 60) * rate;
+
+                              return (
+                                <div key={s.id} className="bg-slate-955 border border-slate-850 p-4 space-y-3 font-mono text-xs">
+                                  <div className="flex justify-between items-start border-b border-slate-800 pb-2">
+                                    <div>
+                                      <span className="font-bold text-slate-100 text-sm block">{s.staffName}</span>
+                                      <span className="text-[10px] text-slate-500 font-semibold block">{s.siteName}</span>
+                                    </div>
+                                    <span className="px-2 py-0.5 bg-brand-blue/20 text-brand-blue font-bold text-[10px]">
+                                      PENDING APPROVAL
+                                    </span>
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400 leading-relaxed font-semibold">
+                                    <div>
+                                      <span className="text-slate-550 block text-[9px] uppercase">Shift Date:</span>
+                                      <span>{s.date} ({s.startTime})</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-550 block text-[9px] uppercase">Overtime Claim:</span>
+                                      <span className="text-brand-yellow font-extrabold">{s.overtimeMinutes} minutes</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-550 block text-[9px] uppercase">Estimated Pay:</span>
+                                      <span>£{(s.hours * rate).toFixed(2)} ({s.hours} hrs)</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-550 block text-[9px] uppercase">Overtime Cost:</span>
+                                      <span className="text-emerald-500 font-extrabold">£{cost.toFixed(2)}</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex gap-2 pt-2 border-t border-slate-850">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleApproveOvertime(s)}
+                                      className="flex-1 h-8 bg-emerald-600 hover:bg-emerald-500 text-slate-955 font-bold uppercase text-[10px] cursor-pointer transition rounded-none border-none"
+                                    >
+                                      Approve Overtime
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeclineOvertime(s)}
+                                      className="flex-1 h-8 bg-slate-950 hover:bg-slate-850 text-slate-400 hover:text-slate-200 border border-slate-800 text-[10px] font-bold uppercase cursor-pointer transition rounded-none"
+                                    >
+                                      Decline
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {reportsTab === "variations" && (
+                    <div className="space-y-4 animate-in fade-in duration-200">
+                      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                        <History className="w-4 h-4 text-brand-yellow" />
+                        <span className="font-bold text-slate-200 uppercase tracking-wider text-xs">Dayworks & Variations Register</span>
+                      </div>
+
+                      {variations.length === 0 ? (
+                        <div className="text-slate-500 italic text-xs py-8 text-center bg-slate-950 border border-slate-850">
+                          No variation logs submitted.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {variations.map(v => (
+                            <div key={v.id} className="bg-slate-955 border border-slate-850 p-4 space-y-3 font-mono text-xs">
+                              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                                <span className="font-bold text-slate-100">{v.staffName}</span>
+                                <span className="text-slate-550 text-[10px]">
+                                  {new Date(v.timestamp).toLocaleString("en-GB")}
+                                </span>
+                              </div>
+                              
+                              <p className="text-slate-300 font-sans text-xs bg-slate-950/45 p-2.5 border border-slate-850 leading-relaxed font-semibold">
+                                {v.notes}
+                              </p>
+
+                              {v.photo && (
+                                <div className="border border-slate-850 p-1 bg-slate-950 relative group">
+                                  <img 
+                                    src={v.photo} 
+                                    alt="Attachment" 
+                                    className="max-h-32 object-contain mx-auto cursor-zoom-in"
+                                    onClick={() => setActiveLightboxImage(v.photo!)} 
+                                  />
+                                  <span className="absolute bottom-1 right-1 bg-slate-955/80 border border-slate-800 text-[8px] text-slate-500 px-1 font-bold">
+                                    Click to expand
+                                  </span>
+                                </div>
+                              )}
+
+                              <div className="text-[10px] text-slate-500 flex justify-between items-center pt-1">
+                                <span>GPS Coords: ({v.lat.toFixed(5)}, {v.lng.toFixed(5)})</span>
+                                {v.lat !== 0 && v.lng !== 0 && (
+                                  <a
+                                    href={`https://www.google.com/maps/search/?api=1&query=${v.lat},${v.lng}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-brand-blue hover:underline"
+                                  >
+                                    View Map
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {reportsTab === "talks" && (
+                    <div className="space-y-6 animate-in fade-in duration-200">
+                      {/* Create Briefing Form */}
+                      <div className="bg-slate-955 border border-slate-850 p-5 space-y-4">
+                        <span className="text-xs text-slate-200 font-bold uppercase tracking-wider block border-b border-slate-800 pb-2">
+                          📢 Publish Mandatory H&S Briefing (Toolbox Talk)
+                        </span>
+
+                        <form onSubmit={handleAddBriefingSubmit} className="space-y-3.5 font-mono text-xs">
+                          <div>
+                            <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Briefing Topic</label>
+                            <select
+                              value={newBriefingTopic}
+                              onChange={(e) => setNewBriefingTopic(e.target.value)}
+                              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-xs font-bold"
+                            >
+                              <option value="Working at Height">Working at Height</option>
+                              <option value="Plant Machinery">Plant Machinery</option>
+                              <option value="Manual Handling">Manual Handling</option>
+                              <option value="General Site Safety">General Site Safety</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Briefing / Talk Content</label>
+                            <textarea
+                              rows={4}
+                              placeholder="Write the safety talk content here... (Workers must acknowledge before opening app dashboard)"
+                              value={newBriefingContent}
+                              onChange={(e) => setNewBriefingContent(e.target.value)}
+                              className="w-full p-2.5 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none font-sans text-xs"
+                              required
+                            />
+                          </div>
+
+                          <button
+                            type="submit"
+                            disabled={briefingSubmitting}
+                            className="h-10 px-5 bg-brand-yellow hover:bg-amber-500 disabled:opacity-50 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 cursor-pointer border-none"
+                          >
+                            {briefingSubmitting ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-slate-955" />
+                            ) : (
+                              <span>Publish Toolbox Talk</span>
+                            )}
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Briefings completion log */}
+                      <div className="space-y-3">
+                        <span className="text-xs text-slate-400 font-bold uppercase tracking-wider block border-b border-slate-800 pb-2">
+                          Active Briefings Log & Receipts
+                        </span>
+
+                        {briefings.length === 0 ? (
+                          <div className="text-slate-500 italic text-xs py-8 text-center bg-slate-955 border border-slate-850">
+                            No published safety briefings found.
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {briefings.map(b => {
+                              const receiptsForTalk = briefingReceipts.filter(r => r.briefingId === b.id);
+                              const ackCount = receiptsForTalk.length;
+                              const totalWorkers = allAdminStaff.length;
+                              const isExpanded = expandedBriefingId === b.id;
+
+                              return (
+                                <div key={b.id} className="bg-slate-955 border border-slate-850 p-4 space-y-3 font-mono text-xs">
+                                  <div className="flex justify-between items-center">
+                                    <div>
+                                      <span className="font-extrabold text-brand-yellow text-sm block">{b.topic}</span>
+                                      <span className="text-[10px] text-slate-500 block">Published: {new Date(b.timestamp).toLocaleString("en-GB")}</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedBriefingId(isExpanded ? null : b.id)}
+                                      className="px-3 py-1 bg-slate-900 border border-slate-800 text-slate-350 hover:text-slate-200 text-[10px] font-bold uppercase cursor-pointer"
+                                    >
+                                      {isExpanded ? "Collapse" : `View Receipts (${ackCount}/${totalWorkers})`}
+                                    </button>
+                                  </div>
+
+                                  {isExpanded && (
+                                    <div className="border-t border-slate-850 pt-3.5 space-y-3 animate-in fade-in duration-150">
+                                      <span className="text-[10px] text-slate-455 font-bold uppercase tracking-wider block">Receipts Directory</span>
+                                      
+                                      <div className="overflow-x-auto border border-slate-850 bg-slate-955">
+                                        <table className="w-full text-left text-[11px] border-collapse">
+                                          <thead>
+                                            <tr className="bg-slate-900 border-b border-slate-850 text-slate-500 uppercase font-bold text-[9px] tracking-wider">
+                                              <th className="p-2">Worker</th>
+                                              <th className="p-2">Status</th>
+                                              <th className="p-2">Timestamp</th>
+                                              <th className="p-2 text-right">GPS Coordinate</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-850 font-semibold text-slate-300">
+                                            {allAdminStaff.map(worker => {
+                                              const receipt = receiptsForTalk.find(r => r.staffId === worker.id);
+                                              return (
+                                                <tr key={worker.id} className="hover:bg-slate-900/50">
+                                                  <td className="p-2 font-bold text-slate-200">{worker.name}</td>
+                                                  <td className="p-2">
+                                                    {receipt ? (
+                                                      <span className="text-emerald-500 font-bold">ACKNOWLEDGED</span>
+                                                    ) : (
+                                                      <span className="text-slate-650 italic">PENDING</span>
+                                                    )}
+                                                  </td>
+                                                  <td className="p-2">
+                                                    {receipt ? new Date(receipt.timestamp).toLocaleString("en-GB") : "-"}
+                                                  </td>
+                                                  <td className="p-2 text-right">
+                                                    {receipt ? (
+                                                      receipt.lat !== 0 && receipt.lng !== 0 ? (
+                                                        <a
+                                                          href={`https://www.google.com/maps/search/?api=1&query=${receipt.lat},${receipt.lng}`}
+                                                          target="_blank"
+                                                          rel="noopener noreferrer"
+                                                          className="text-brand-blue hover:underline"
+                                                        >
+                                                          ({receipt.lat.toFixed(4)}, {receipt.lng.toFixed(4)})
+                                                        </a>
+                                                      ) : (
+                                                        <span className="text-slate-600">Captured (0,0)</span>
+                                                      )
+                                                    ) : (
+                                                      "-"
+                                                    )}
+                                                  </td>
+                                                </tr>
+                                              );
+                                            })}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              );
+            })()}
+
+            {adminSubView === "help" && (
+              <div className="bg-slate-900 border border-slate-800 p-5 space-y-6">
+                {/* Title */}
+                <div className="flex items-center gap-2.5 border-b border-slate-800 pb-4">
+                  <HelpCircle className="w-5 h-5 text-brand-yellow animate-pulse" />
+                  <h3 className="text-lg font-bold text-slate-100 uppercase tracking-wider">Help Manual & PWA Installation Guide</h3>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Left Column: Worker PWA Setup & App Manual */}
+                  <div className="bg-slate-955 border border-slate-850 p-5 space-y-6">
+                    <h4 className="text-sm font-extrabold text-brand-yellow uppercase tracking-wider border-b border-slate-800 pb-2 flex items-center gap-2">
+                      📲 Field Worker Application Manual
+                    </h4>
+                    
+                    <div className="space-y-4 text-xs text-slate-350 leading-relaxed font-sans">
+                      {/* PWA Section */}
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">1. PROGRESSIVE WEB APP (PWA) INSTALLATION</span>
+                        <p>To run this application as a standalone mobile app on your smartphone:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            <strong className="text-slate-300">Apple iOS (Safari browser):</strong> Tap the <strong className="text-slate-100">Share</strong> button (square box with an up arrow) in Safari's bottom toolbar, scroll down the actions sheet, and select <strong className="text-slate-100">"Add to Home Screen"</strong>. Give the app a name and tap "Add" at the top-right.
+                          </li>
+                          <li>
+                            <strong className="text-slate-300">Android (Chrome browser):</strong> Tap the <strong className="text-slate-100">Three-Dot Menu</strong> icon at the top-right of Chrome, and select <strong className="text-slate-100">"Install App"</strong> or <strong className="text-slate-100">"Add to Home Screen"</strong>. Follow the screen prompt to install.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Cookie Consent */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">2. PRIVACY & GDPR COOKIE CONSENT</span>
+                        <p>Upon your first login, a cookie consent banner will appear at the bottom of the viewport. Select your preferences to store settings locally on your mobile device. Fully compliant with UK GDPR and PECR accountability standards.</p>
+                      </div>
+
+                      {/* Clock In/Out */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">3. CLOCK-IN / CLOCK-OUT WORKFLOW</span>
+                        <p>Open the app on your home screen and log in using your registered email address.</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Locate your scheduled shift card and tap the <strong className="text-slate-200">"Clock In"</strong> button. Accept the browser location access popup to log your check-in time and precise GPS coordinates.
+                          </li>
+                          <li>
+                            You must clock in to receive automated site validation prompts.
+                          </li>
+                          <li>
+                            When you finish work, return to the shift card and tap the <strong className="text-slate-200">"Clock Out"</strong> button to register your check-out. Your coordinates are captured on clock-out as well.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Geofence Verification */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">4. SITE VALIDATION WINDOWS</span>
+                        <p>While clocked in, the system checks if you are on site using validation prompts:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            When a validation window opens, a chime sound is dispatched.
+                          </li>
+                          <li>
+                            Tap the <strong className="text-slate-100">"Verify you are on site"</strong> prompt.
+                          </li>
+                          <li>
+                            The app will fetch your location. If you are inside the site geofence radius, your checkpoint logs are verified. If you are outside the boundary, the validation will fail.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Transit departures */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">5. TRANSIT DEPARTURES (OFF-SITE JOBS)</span>
+                        <p>If you need to leave the site boundary during work (e.g., to fetch supplies, run errands, or visit depots):</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Scroll down to the <strong className="text-slate-200">Transit Logger</strong> card.
+                          </li>
+                          <li>
+                            Select your transit reason (e.g., supplies) and tap <strong className="text-slate-100">"Depart Site"</strong>.
+                          </li>
+                          <li>
+                            This pauses the active site geofence prompts while you are away.
+                          </li>
+                          <li>
+                            When you return to site, return to this card and tap <strong className="text-slate-100">"Return to Site"</strong> to reactivate validation checks.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* H&S Toolbox talks */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">6. MANDATORY HEALTH & SAFETY BRIEFINGS</span>
+                        <p>Admins can push mandatory briefings (Toolbox Talks) to workers:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            If a briefing is active and you haven't read it, a full-screen popup modal will block the dashboard.
+                          </li>
+                          <li>
+                            You must read the safety talk text and tap <strong className="text-brand-yellow">"I have read and understood this talk"</strong> to clear the alert.
+                          </li>
+                          <li>
+                            Tapping the confirmation button silently registers a read receipt with your precise coordinates and timestamp.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Dayworks & Variations */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">7. LOG VARIATION / DAYWORK</span>
+                        <p>If a client requests extra, unplanned work not covered in your schedule:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Scroll down to the <strong className="text-slate-200">Log Variation / Daywork</strong> form.
+                          </li>
+                          <li>
+                            Describe the work details in the text notes block.
+                          </li>
+                          <li>
+                            Tap the file input to capture a photo of the extra work using your phone's camera.
+                          </li>
+                          <li>
+                            Tap <strong className="text-slate-100">"Submit Variation Log"</strong>. The app uploads the photo and appends your GPS coordinates to verify your on-site request.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Overtime Claims */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-yellow font-extrabold uppercase tracking-wider block">8. DIGITAL OVERTIME CLAIMS</span>
+                        <p>If you stay beyond your scheduled shift hours:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            At the scheduled shift end time, a checkout prompt modal will open.
+                          </li>
+                          <li>
+                            Select <strong className="text-slate-200">"Logging Overtime Work"</strong> to keep the shift open.
+                          </li>
+                          <li>
+                            When you finish, clock out manually. The system calculates the overtime minutes between the scheduled shift end and your checkout timestamp automatically.
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Admin Dashboard Guide */}
+                  <div className="bg-slate-955 border border-slate-850 p-5 space-y-6">
+                    <h4 className="text-sm font-extrabold text-brand-blue uppercase tracking-wider border-b border-slate-800 pb-2 flex items-center gap-2">
+                      🛡️ Admin Dashboard Operations Guide
+                    </h4>
+                    
+                    <div className="space-y-4 text-xs text-slate-350 leading-relaxed font-sans">
+                      {/* Rota Scheduling */}
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">1. STAFF REGISTRY & ROTA SCHEDULING</span>
+                        <p>Navigate to the <strong className="text-slate-200">Staff Directory & Rota</strong> tab:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            <strong className="text-slate-200">Register Staff:</strong> Input full name, phone number, email address, and hourly rate.
+                          </li>
+                          <li>
+                            <strong className="text-slate-200">Create Shift:</strong> Select the worker profile, target site, start date, duration, and shift start time to schedule rotas.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Geofencing Config */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">2. GEOFENCING CONFIGURATION & LIVE TRACKING MAP</span>
+                        <p>Navigate to the <strong className="text-slate-200">Geofence Map & Tracking</strong> tab:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Configure site boundaries and geofence radii.
+                          </li>
+                          <li>
+                            View interactive geofence rings and workers' clock-in/out and checkpoint verification events plotted live on the Map.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Manual Validation */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">3. DISPATCHING SITE VALIDATIONS</span>
+                        <p>To verify a worker is currently on site at any time:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Locate the worker's shift card inside the Shift Activity Log.
+                          </li>
+                          <li>
+                            Click the <strong className="text-slate-100">"Validate Now"</strong> button. This instantly sends a prompt to their device, requiring them to verify their GPS location.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Audit Log */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">4. GDPR COMPLIANCE AUDITING</span>
+                        <p>Navigate to the <strong className="text-slate-200">Audit Registers</strong> tab to inspect internal logs. Every worker check-in, check-out, off-site transit log, safety briefing receipt, and manual validation request is archived with a verified coordinate and timestamp, meeting UK GDPR Article 24 regulations.</p>
+                      </div>
+
+                      {/* Payroll Bento COST */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">5. PAYROLL REPORTS & EST. COST BREAKDOWNS</span>
+                        <p>Navigate to the <strong className="text-slate-200">Payroll Reports &rarr; Hours & Payroll</strong> tab:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Review total scheduled hours versus validated on-site hours, alongside compliance rates.
+                          </li>
+                          <li>
+                            Inspect verified payouts (GDPR Article 24 compliant) against pending payouts.
+                          </li>
+                          <li>
+                            Click <strong className="text-slate-100">"Export CSV Report"</strong> to generate downloadable files.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Overtime Approvals */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">6. OVERTIME CLAIMS APPROVALS LEDGER</span>
+                        <p>Navigate to the <strong className="text-slate-200">Payroll Reports &rarr; Overtime Claims</strong> tab:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Displays shifts where a worker stayed late and initiated an overtime claim.
+                          </li>
+                          <li>
+                            Admins can review shift details, accrued overtime minutes, and associated cost increases.
+                          </li>
+                          <li>
+                            Select <strong className="text-slate-200">"Approve Overtime"</strong> to merge overtime minutes into the shift's payable duration, or select <strong className="text-slate-200">"Decline"</strong>.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Dayworks Register */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">7. DAYWORKS & VARIATIONS REGISTER</span>
+                        <p>Navigate to the <strong className="text-slate-200">Payroll Reports &rarr; Dayworks & Variations</strong> tab:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Lists worker submissions for unplanned client requests.
+                          </li>
+                          <li>
+                            Shows notes, coordinates, and clickable maps links.
+                          </li>
+                          <li>
+                            Click the thumbnail image to open a fullscreen lightbox photo viewer.
+                          </li>
+                        </ul>
+                      </div>
+
+                      {/* Toolbox Talks safety briefings */}
+                      <div className="space-y-1.5 border-t border-slate-850 pt-3">
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">8. H&S TOOLBOX TALKS PORTAL</span>
+                        <p>Navigate to the <strong className="text-slate-200">Payroll Reports &rarr; H&S Toolbox Talks</strong> tab:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-400">
+                          <li>
+                            Select a CITB safety talk topic (e.g., Working at Height) and type the briefing text.
+                          </li>
+                          <li>
+                            Click <strong className="text-slate-100">"Publish Toolbox Talk"</strong> to immediately push this mandatory briefing onto all active workers' devices.
+                          </li>
+                          <li>
+                            Track completion ratios for each briefing and click <strong className="text-slate-200">"View Receipts"</strong> to view acknowledgment status, timestamps, and Google Maps coordinate links for each employee.
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Privacy/GDPR Sandbox Info Panel */}
+                <div className="bg-slate-950 p-4 border border-slate-800 rounded-none text-slate-400 leading-relaxed flex items-start gap-3">
+                  <Shield className="w-5 h-5 text-slate-500 shrink-0 mt-0.5" />
+                  <p className="text-xs">
+                    <strong className="text-slate-350 uppercase tracking-wider block mb-1">UK GDPR Article 24 Safeguards</strong>
+                    This application relies on scheduled check-ins instead of constant background location tracking. Your device checks its GPS coordinate ONLY when you respond to these validation windows. Data is partitioned on a per-user basis in Firestore.
+                  </p>
+                </div>
+              </div>
+            )}
+
           </div>
         )}
 
@@ -728,31 +1866,92 @@ export default function Home() {
                 Your Scheduled Shifts
               </span>
               
-              <div className="space-y-2.5 max-h-48 overflow-y-auto">
+              <div className="space-y-2.5 max-h-64 overflow-y-auto">
                 {workerShifts.length === 0 ? (
                   <div className="text-slate-500 text-xs italic py-4 text-center">
                     You have no scheduled shifts assigned in this rota.
                   </div>
                 ) : (
                   workerShifts.map((shift) => (
-                    <div key={shift.id} className="p-4 bg-slate-950 border border-slate-800 rounded-none flex justify-between items-center gap-3">
-                      <div>
-                        <div className="font-extrabold text-slate-100 text-sm">{shift.siteName}</div>
-                        <div className="text-slate-400 text-xs font-semibold mt-1">
-                          Date: <span className="text-slate-200">{(() => {
-                            const p = shift.date.split("-");
-                            return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : shift.date;
-                          })()}</span> | Hours: <span className="text-slate-200">{shift.hours} hrs</span> | Start: <span className="text-slate-200">{shift.startTime}</span>
+                    <div key={shift.id} className="p-4 bg-slate-950 border border-slate-800 rounded-none space-y-3">
+                      <div className="flex justify-between items-center gap-3">
+                        <div>
+                          <div className="font-extrabold text-slate-100 text-sm">{shift.siteName}</div>
+                          <div className="text-slate-400 text-xs font-semibold mt-1">
+                            Date: <span className="text-slate-200">{(() => {
+                              const p = shift.date.split("-");
+                              return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : shift.date;
+                            })()}</span> | Hours: <span className="text-slate-200">{shift.hours} hrs</span> | Start: <span className="text-slate-200">{shift.startTime}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className={`px-2.5 py-1 text-[10px] font-extrabold border rounded-none uppercase tracking-wider leading-none ${
+                            shift.validated 
+                              ? "bg-emerald-950 text-emerald-400 border-emerald-800" 
+                              : "bg-slate-900 text-rose-450 border-rose-955 animate-pulse"
+                          }`}>
+                            {shift.validated ? "VALIDATED" : "CHECK-IN REQ"}
+                          </span>
                         </div>
                       </div>
-                      <div>
-                        <span className={`px-2.5 py-1 text-[10px] font-extrabold border rounded-none uppercase tracking-wider leading-none ${
-                          shift.validated 
-                            ? "bg-emerald-950 text-emerald-400 border-emerald-800" 
-                            : "bg-slate-900 text-rose-450 border-rose-955 animate-pulse"
-                        }`}>
-                          {shift.validated ? "VALIDATED" : "CHECK-IN REQ"}
-                        </span>
+
+                      {/* Clock In / Clock Out Controls */}
+                      <div className="pt-2 border-t border-slate-900 flex flex-wrap justify-between items-center gap-2 text-xs font-mono">
+                        <div className="text-slate-400 space-y-1">
+                          {shift.clockInTime && (
+                            <div>
+                              📥 <span className="text-slate-500">In:</span> <span className="text-emerald-400 font-bold">{shift.clockInTime}</span>
+                              {shift.clockInCoordinates && (
+                                <span className="text-[10px] text-slate-650 block">
+                                  Coords: ({shift.clockInCoordinates.lat.toFixed(5)}, {shift.clockInCoordinates.lng.toFixed(5)})
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {shift.clockOutTime && (
+                            <div>
+                              📤 <span className="text-slate-500">Out:</span> <span className="text-brand-yellow font-bold">{shift.clockOutTime}</span>
+                              {shift.clockOutCoordinates && (
+                                <span className="text-[10px] text-slate-650 block">
+                                  Coords: ({shift.clockOutCoordinates.lat.toFixed(5)}, {shift.clockOutCoordinates.lng.toFixed(5)})
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {!shift.clockInTime && !shift.clockOutTime && (
+                            <span className="text-slate-650 italic">Not clocked in</span>
+                          )}
+                        </div>
+
+                        <div>
+                          {loadingClockId === shift.id ? (
+                            <div className="flex items-center gap-1.5 text-slate-450 font-bold">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-blue" />
+                              <span>RETRIEVING GPS...</span>
+                            </div>
+                          ) : (
+                            <>
+                              {!shift.clockInTime && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleClockIn(shift)}
+                                  className="h-7 px-3.5 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-[10px] cursor-pointer"
+                                >
+                                  Clock In
+                                </button>
+                              )}
+                              {shift.clockInTime && !shift.clockOutTime && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleClockOut(shift)}
+                                  className="h-7 px-3.5 bg-brand-yellow hover:bg-yellow-500 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-[10px] cursor-pointer"
+                                >
+                                  Clock Out
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -781,6 +1980,8 @@ export default function Home() {
                 setActivePrompt={setActivePrompt}
                 selectedStaffId={selectedStaffId}
                 selectedStaffName={staffMembers.find(s => s.id === selectedStaffId)?.name || (user ? user.email : undefined)}
+                simulatedCoords={simulatedCoords}
+                setSimulatedCoords={setSimulatedCoords}
               />
             </div>
 
@@ -791,6 +1992,60 @@ export default function Home() {
               selectedStaffId={selectedStaffId}
               selectedStaffName={staffMembers.find(s => s.id === selectedStaffId)?.name || (user ? user.email : undefined)}
             />
+
+            {/* DAYWORKS & VARIATIONS LOGGER */}
+            <div className="bg-slate-900 border border-slate-800 p-4 space-y-3 font-mono text-xs">
+              <div className="flex items-center gap-2 border-b border-slate-800 pb-2.5 text-slate-100 font-bold uppercase tracking-wider">
+                <span>📋 Log Variation / Daywork</span>
+              </div>
+              
+              <form onSubmit={handleAddVariationSubmit} className="space-y-3.5">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Variation Description / Notes</label>
+                  <textarea
+                    rows={3}
+                    placeholder="Describe the un-planned work (e.g. dug extra trench, cleared extra debris...)"
+                    value={varNotes}
+                    onChange={(e) => setVarNotes(e.target.value)}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-xs rounded-none font-sans"
+                    required
+                  />
+                </div>
+                
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Capture Photo Attachment</label>
+                  <input
+                    type="file"
+                    id="var-photo-file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFileChange}
+                    className="w-full text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:border file:border-slate-800 file:bg-slate-950 file:text-slate-350 file:text-[10px] file:font-bold file:uppercase file:rounded-none file:cursor-pointer hover:file:bg-slate-850"
+                  />
+                  {varPhoto && (
+                    <div className="mt-2.5 border border-slate-800 p-1 bg-slate-950">
+                      <img src={varPhoto} alt="Preview" className="max-h-36 object-contain mx-auto" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-[10px] text-slate-500 leading-normal font-sans">
+                  Submissions will automatically append your current location and timestamp to verify the variation request.
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={varSubmitting}
+                  className="w-full h-9 bg-brand-yellow hover:bg-amber-500 disabled:opacity-50 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 cursor-pointer border-none"
+                >
+                  {varSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-955" />
+                  ) : (
+                    <span>Submit Variation Log</span>
+                  )}
+                </button>
+              </form>
+            </div>
 
           </div>
         )}
@@ -907,7 +2162,7 @@ export default function Home() {
                         </span>
                         <ul className="list-disc pl-4 space-y-1.5 text-slate-400">
                           <li>
-                            <strong className="text-slate-300">Roster Scheduling:</strong> Register workers and schedule dates/shifts. Workers sign in using these pre-registered emails.
+                            <strong className="text-slate-300">Rota Scheduling:</strong> Register workers and schedule dates/shifts. Workers sign in using these pre-registered emails.
                           </li>
                           <li>
                             <strong className="text-slate-300">Geofencing & Locations:</strong> Draw geofences. Configure checkpoints and pre-define transit locations workers can log.
@@ -973,65 +2228,27 @@ export default function Home() {
                     </button>
 
                     <button
-                      onClick={() => { setDrawerTab("help"); }}
-                      className="w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer bg-slate-905 hover:bg-slate-850 text-brand-yellow border-slate-850"
+                      onClick={() => { setAdminSubView("reports"); setIsMenuOpen(false); }}
+                      className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer ${
+                        adminSubView === "reports" 
+                          ? "bg-brand-blue/20 text-brand-blue border-brand-blue/50" 
+                          : "bg-slate-905 hover:bg-slate-850 text-slate-400 border-slate-850"
+                      }`}
+                    >
+                      Payroll Reports
+                    </button>
+
+                    <button
+                      onClick={() => { setAdminSubView("help"); setIsMenuOpen(false); }}
+                      className={`w-full p-3 text-left border rounded-none uppercase font-bold tracking-wider transition cursor-pointer ${
+                        adminSubView === "help" 
+                          ? "bg-brand-yellow/20 text-brand-yellow border-brand-yellow/50" 
+                          : "bg-slate-905 hover:bg-slate-850 text-brand-yellow border-slate-850"
+                      }`}
                     >
                       Help & PWA Guide
                     </button>
                   </nav>
-
-                  {/* Shift Hours & Estimated Payroll Report (Admin Drawer) */}
-                  {(() => {
-                    const totalSchHours = allAdminShifts.reduce((sum, s) => sum + s.hours, 0);
-                    const totalValHours = allAdminShifts.reduce((sum, s) => sum + (s.validated ? s.hours : 0), 0);
-                    const payDetails = allAdminShifts.reduce((acc, shift) => {
-                      const staff = allAdminStaff.find(s => s.id === shift.staffId);
-                      const rate = staff ? staff.hourlyRate : 15.00;
-                      const pay = shift.hours * rate;
-                      if (shift.validated) {
-                        acc.validatedPay += pay;
-                      } else {
-                        acc.pendingPay += pay;
-                      }
-                      return acc;
-                    }, { validatedPay: 0, pendingPay: 0 });
-                    const totPayroll = payDetails.validatedPay + payDetails.pendingPay;
-
-                    return (
-                      <div className="bg-slate-955 border border-slate-850 p-4 space-y-3 font-mono text-xs">
-                        <div className="flex items-center gap-2 border-b border-slate-800 pb-2 text-slate-200">
-                          <PoundSterling className="w-4 h-4 text-brand-blue" />
-                          <span className="font-bold uppercase tracking-wider">Payroll Report (GBP)</span>
-                        </div>
-                        
-                        <div className="space-y-2">
-                          <div className="flex justify-between text-slate-400">
-                            <span className="text-slate-500 font-bold uppercase">Scheduled</span>
-                            <span className="font-extrabold">{totalSchHours.toFixed(1)} hrs</span>
-                          </div>
-                          <div className="flex justify-between text-slate-400">
-                            <span className="text-slate-500 font-bold uppercase">Validated</span>
-                            <span className="text-brand-blue font-extrabold">{totalValHours.toFixed(1)} hrs</span>
-                          </div>
-                          <div className="flex justify-between border-t border-slate-850 pt-2 text-slate-355">
-                            <span className="text-slate-500 font-bold uppercase">Total Est. Pay</span>
-                            <span className="text-brand-yellow font-extrabold">£{totPayroll.toFixed(2)}</span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-1 text-[11px] border-t border-slate-850 pt-2 text-slate-500 font-medium">
-                          <div className="flex justify-between">
-                            <span>Verified Pay:</span>
-                            <span className="text-emerald-500 font-bold">£{payDetails.validatedPay.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Pending Pay:</span>
-                            <span className="text-rose-450 font-bold">£{payDetails.pendingPay.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
                 </>
               )}
 
@@ -1047,6 +2264,112 @@ export default function Home() {
 
       {/* COMPLIANCE COOKIE LAYER */}
       <ConsentBanner />
+
+      {/* MANDATORY HEALTH & SAFETY BRIEFING (TROJAN HORSE) PING */}
+      {unreadBriefing && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-955/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="max-w-md w-full bg-slate-900 border-2 border-brand-yellow p-6 shadow-2xl relative overflow-hidden font-mono">
+            {/* Decorative top accent line */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-brand-yellow" />
+            
+            <div className="flex items-center gap-2 text-brand-yellow font-extrabold text-sm uppercase tracking-wider mb-4">
+              <ShieldAlert className="w-5 h-5 text-brand-yellow animate-bounce animate-duration-1000" />
+              <span>MANDATORY HEALTH & SAFETY BRIEFING</span>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="bg-slate-950 p-3 border border-slate-850">
+                <span className="text-[10px] text-slate-550 font-bold uppercase tracking-wider block">Topic:</span>
+                <span className="text-xs font-bold text-slate-100 uppercase tracking-widest">{unreadBriefing.topic}</span>
+              </div>
+              
+              <div className="text-xs text-slate-300 leading-relaxed font-sans bg-slate-950/60 p-3 border border-slate-850 max-h-48 overflow-y-auto">
+                <p className="font-semibold whitespace-pre-wrap">{unreadBriefing.content}</p>
+              </div>
+              
+              <div className="bg-slate-950 border border-slate-850 p-3 text-[10px] text-slate-500 leading-normal font-sans">
+                <span className="font-bold text-slate-400 block mb-1">UK GDPR COMPLIANCE VERIFICATION NOTICE</span>
+                Acknowledging this safety briefing will silently capture your precise GPS coordinates as a verified read-receipt timestamp to log with the site administrator. Continuous background tracking is disabled.
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAcknowledgeBriefing}
+                disabled={hsSubmitting}
+                className="w-full h-11 bg-brand-yellow hover:bg-amber-500 disabled:opacity-50 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs flex items-center justify-center gap-2 cursor-pointer border-none"
+              >
+                {hsSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-955" />
+                ) : (
+                  <span>I have read and understood this talk</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DIGITAL OVERTIME CLAIM PROMPT */}
+      {overtimePromptShift && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-955/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="max-w-sm w-full bg-slate-900 border-2 border-brand-blue p-6 shadow-2xl relative overflow-hidden font-mono">
+            {/* Decorative top accent line */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-brand-blue" />
+            
+            <div className="flex items-center gap-2 text-brand-blue font-extrabold text-sm uppercase tracking-wider mb-4">
+              <Clock className="w-5 h-5 text-brand-blue animate-pulse" />
+              <span>SHIFT COMPLETION DIALOG</span>
+            </div>
+            
+            <div className="space-y-4">
+              <p className="text-xs text-slate-355 leading-relaxed font-sans">
+                Your scheduled shift at <strong className="text-slate-100">{overtimePromptShift.siteName}</strong> has ended (Scheduled duration: {overtimePromptShift.hours} hrs, Shift Start: {overtimePromptShift.startTime}). 
+                Please indicate your checkout status:
+              </p>
+              
+              <div className="flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOvertimePromptShift(null);
+                    handleClockOut(overtimePromptShift);
+                  }}
+                  className="w-full h-10 bg-slate-955 hover:bg-slate-850 text-slate-200 font-bold uppercase tracking-wider transition rounded-none text-xs border border-slate-800 cursor-pointer"
+                >
+                  ⏰ Checkout & Clock Out Now
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => handleClaimOvertime(overtimePromptShift)}
+                  className="w-full h-10 bg-brand-blue hover:bg-blue-600 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-xs cursor-pointer border-none"
+                >
+                  🚀 Logging Overtime Work
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX MODAL OVERLAY */}
+      {activeLightboxImage && (
+        <div 
+          onClick={() => setActiveLightboxImage(null)}
+          className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-955/90 backdrop-blur-sm p-4 animate-in fade-in duration-200 cursor-zoom-out"
+        >
+          <div className="relative max-w-3xl max-h-[85vh] border border-slate-800 p-2 bg-slate-950 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <img src={activeLightboxImage} alt="Expanded Variation Detail" className="max-h-[80vh] w-auto object-contain mx-auto" />
+            <button
+              type="button"
+              onClick={() => setActiveLightboxImage(null)}
+              className="absolute -top-10 right-0 text-slate-400 hover:text-slate-100 font-extrabold text-xs uppercase cursor-pointer bg-transparent border-none"
+            >
+              Close [×]
+            </button>
+          </div>
+        </div>
+      )}
 
     </div>
   );

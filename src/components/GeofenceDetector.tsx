@@ -9,8 +9,10 @@ interface GeofenceDetectorProps {
   onValidationSuccess: (event: ShiftEvent) => void;
   activePrompt: boolean;
   setActivePrompt: (val: boolean) => void;
-  selectedStaffId?: string; // Links geofencing validations to scheduling roster
+  selectedStaffId?: string; // Links geofencing validations to scheduling rota
   selectedStaffName?: string;
+  simulatedCoords: { name: string; lat: number; lng: number } | null;
+  setSimulatedCoords: (val: { name: string; lat: number; lng: number } | null) => void;
 }
 
 // Haversine formula to compute distance in meters
@@ -28,7 +30,16 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return R * c;
 }
 
-export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setActivePrompt, selectedStaffId, selectedStaffName }: GeofenceDetectorProps) {
+export function GeofenceDetector({ 
+  uid, 
+  onValidationSuccess, 
+  activePrompt, 
+  setActivePrompt, 
+  selectedStaffId, 
+  selectedStaffName,
+  simulatedCoords,
+  setSimulatedCoords
+}: GeofenceDetectorProps) {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(false);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -40,9 +51,6 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
     radius: number;
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // Simulator State
-  const [simulatedCoords, setSimulatedCoords] = useState<{ name: string; lat: number; lng: number } | null>(null);
 
   useEffect(() => {
     async function loadSites() {
@@ -190,6 +198,7 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
           matchedShift = shifts.find(
             s => s.staffId === selectedStaffId && 
             s.date === todayStr && 
+            s.clockInTime && !s.clockOutTime &&
             !s.validated
           );
         } else if (matchedSite?.type === "admin" && matchedSite.associatedSiteId) {
@@ -198,6 +207,7 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
             s => s.staffId === selectedStaffId && 
             s.date === todayStr && 
             s.siteName === associatedSite?.name &&
+            s.clockInTime && !s.clockOutTime &&
             !s.validated
           );
         } else {
@@ -205,35 +215,67 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
             s => s.staffId === selectedStaffId && 
             s.date === todayStr && 
             s.siteName === matchedSite?.name &&
+            s.clockInTime && !s.clockOutTime &&
             !s.validated
           );
           if (!matchedShift) {
             matchedShift = shifts.find(
               s => s.staffId === selectedStaffId && 
               s.date === todayStr && 
+              s.clockInTime && !s.clockOutTime &&
               !s.validated
             );
           }
         }
 
         if (matchedShift) {
+          const matchedSiteTimes = matchedSite.validationTimes || [];
+          const currentAnswered = matchedShift.answeredCheckpoints || [];
+          
+          // Determine which checkpoint time we are validating
+          let validatedTime = "";
+          const nowObj = new Date();
+          const currMins = nowObj.getHours() * 60 + nowObj.getMinutes();
+          
+          if (matchedSiteTimes.length > 0) {
+            let closestDiff = Infinity;
+            for (const time of matchedSiteTimes) {
+              const [h, m] = time.split(":").map(Number);
+              const timeMins = h * 60 + m;
+              const diff = Math.abs(currMins - timeMins);
+              if (diff <= 45 && diff < closestDiff) {
+                closestDiff = diff;
+                validatedTime = time;
+              }
+            }
+          }
+          
+          if (!validatedTime) {
+            const hh = String(nowObj.getHours()).padStart(2, "0");
+            const mm = String(nowObj.getMinutes()).padStart(2, "0");
+            validatedTime = `${hh}:${mm}`;
+          }
+
+          const newAnswered = currentAnswered.includes(validatedTime)
+            ? currentAnswered
+            : [...currentAnswered, validatedTime];
+
+          // Check if all scheduled checkpoints are satisfied
+          const allScheduledSatisfied = matchedSiteTimes.length === 0 || 
+            matchedSiteTimes.every(time => newAnswered.includes(time));
+
           await dbUpdateShift(uid, matchedShift.id, {
-            validated: true,
-            validatedAt: new Date().toISOString()
+            validated: allScheduledSatisfied,
+            validatedAt: new Date().toISOString(),
+            answeredCheckpoints: newAnswered
           });
           
-          let logAction = "SHIFT_VALIDATED_AUTOMATICALLY";
-          let logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated at site ${matchedSite.name} via geofencing.`;
+          let logAction = "SHIFT_CHECKPOINT_VALIDATED";
+          let logDetails = `Checkpoint '${validatedTime}' validated for Shift ID ${matchedShift.id} (worker: ${matchedShift.staffName}) at site ${matchedSite.name}. Status: ${newAnswered.length}/${matchedSiteTimes.length || 1} checkpoints cleared.`;
           
-          if (matchedSite?.type === "global") {
-            logAction = "SHIFT_VALIDATED_VIA_GLOBAL_LOCATION";
-            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Global Location (${matchedSite.name}).`;
-          } else if (matchedSite?.type === "merchant") {
-            logAction = "SHIFT_VALIDATED_VIA_MERCHANT";
-            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Merchant Location (${matchedSite.name}).`;
-          } else if (matchedSite?.type === "admin") {
-            logAction = "SHIFT_VALIDATED_VIA_ADMIN_AREA";
-            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} validated via Admin Area (${matchedSite.name}).`;
+          if (allScheduledSatisfied) {
+            logAction = "SHIFT_VALIDATED_FULLY";
+            logDetails = `Shift ID ${matchedShift.id} for worker ${matchedShift.staffName} FULLY validated at site ${matchedSite.name} after clearing all scheduled checkpoints.`;
           }
           
           await dbAddAuditLog(uid, logAction, logDetails);

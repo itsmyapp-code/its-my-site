@@ -11,6 +11,7 @@ import {
   dbUpdateSite,
   dbGetStaff,
   dbAddValidationRequest,
+  dbAddEvent,
   Site, 
   ShiftEvent, 
   Staff,
@@ -241,8 +242,18 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
         `Admin dispatched instant validation request to targeted ${instantTargetType}s: ${targetNames}`
       );
 
+      // Save event to Shift Activity Log (events collection)
+      await dbAddEvent(uid, {
+        type: "validation_request",
+        timestamp: new Date().toISOString(),
+        locationName: `Validation requested for ${instantTargetType}s: ${targetNames}`,
+        lat: 0,
+        lng: 0
+      });
+
       setDispatchMsg("Request dispatched successfully!");
       setInstantTargetIds([]);
+      loadData();
       setTimeout(() => setDispatchMsg(""), 3000);
     } catch (err) {
       console.error(err);
@@ -1106,6 +1117,15 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
                   } else if (evt.type === "return") {
                     badgeColor = "bg-emerald-500 text-slate-955";
                     typeText = "Returned On-Site";
+                  } else if (evt.type === "clock_in") {
+                    badgeColor = "bg-brand-blue text-slate-100";
+                    typeText = "Clock In";
+                  } else if (evt.type === "clock_out") {
+                    badgeColor = "bg-brand-yellow text-slate-955";
+                    typeText = "Clock Out";
+                  } else if (evt.type === "validation_request") {
+                    badgeColor = "bg-purple-600 text-slate-100";
+                    typeText = "Validation Dispatch";
                   }
 
                   return (
@@ -1124,6 +1144,11 @@ export function TimelineMap({ uid, refreshTrigger }: TimelineMapProps) {
                           </span>
                         </div>
                         <p className="text-slate-400 font-semibold leading-tight">{evt.locationName}</p>
+                        {evt.lat !== 0 && evt.lng !== 0 && (
+                          <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
+                            GPS Coordinates: ({evt.lat.toFixed(5)}, {evt.lng.toFixed(5)})
+                          </div>
+                        )}
                         {evt.staffName && (
                           <div className="text-xs text-slate-500 font-bold uppercase tracking-wider mt-0.5">
                             Staff: {evt.staffName}

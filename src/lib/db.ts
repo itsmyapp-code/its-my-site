@@ -33,7 +33,7 @@ export interface Site {
 
 export interface ShiftEvent {
   id: string;
-  type: "check_in" | "depart" | "return";
+  type: "check_in" | "depart" | "return" | "clock_in" | "clock_out" | "validation_request";
   timestamp: string; // ISO String
   locationName: string;
   lat: number;
@@ -79,6 +79,45 @@ export interface Shift {
   hours: number;
   validated: boolean;
   validatedAt?: string;
+  answeredCheckpoints?: string[];
+  clockInTime?: string;
+  clockInCoordinates?: { lat: number; lng: number };
+  clockOutTime?: string;
+  clockOutCoordinates?: { lat: number; lng: number };
+  overtimeRequested?: boolean;
+  overtimeMinutes?: number;
+  overtimeApproved?: boolean;
+  overtimeNotes?: string;
+}
+
+export interface Briefing {
+  id: string;
+  topic: string;
+  content: string;
+  timestamp: string;
+  active: boolean;
+}
+
+export interface BriefingReceipt {
+  id: string;
+  briefingId: string;
+  staffId: string;
+  staffName: string;
+  timestamp: string;
+  lat: number;
+  lng: number;
+  verified: boolean;
+}
+
+export interface Variation {
+  id: string;
+  staffId: string;
+  staffName: string;
+  timestamp: string;
+  notes: string;
+  photo?: string; // Base64 encoded image string
+  lat: number;
+  lng: number;
 }
 
 function sanitizeFirestoreData<T extends object>(data: T): T {
@@ -810,4 +849,158 @@ export async function dbGetValidationRequests(uid: string): Promise<ValidationRe
 
   const localKey = `itsmysite_validation_requests_${uid}`;
   return getLocalData<ValidationRequest[]>(localKey, []);
+}
+
+// --- BRIEFINGS (TOOLBOX TALKS) API ---
+export async function dbAddBriefing(uid: string, briefing: Omit<Briefing, "id" | "timestamp">): Promise<string> {
+  const id = "briefing-" + Date.now();
+  const req: Briefing = {
+    ...briefing,
+    id,
+    timestamp: new Date().toISOString()
+  };
+
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      await setDoc(doc(dbInstance, "users", uid, "briefings", id), sanitizeFirestoreData(req));
+      return id;
+    } catch (err) {
+      console.error("Error adding briefing to Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_briefings_${uid}`;
+  const items = getLocalData<Briefing[]>(localKey, []);
+  items.push(req);
+  setLocalData(localKey, items);
+  return id;
+}
+
+export async function dbGetBriefings(uid: string): Promise<Briefing[]> {
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      const colRef = collection(dbInstance, "users", uid, "briefings");
+      const snapshot = await getDocs(colRef);
+      const items: Briefing[] = [];
+      snapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() } as Briefing);
+      });
+      return items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    } catch (err) {
+      console.error("Error reading briefings from Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_briefings_${uid}`;
+  // Default mock briefings if none exist
+  const defaultBriefings: Briefing[] = [
+    {
+      id: "briefing-mock-1",
+      topic: "Working at Height",
+      content: "Ensure all harness equipment is inspected before use. Never work on elevated platforms without guardrails. Report any defects in scaffolding immediately.",
+      timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      active: true
+    },
+    {
+      id: "briefing-mock-2",
+      topic: "Plant Machinery",
+      content: "Maintain a safe 5-meter exclusion zone around active excavators. Operators must verify blindspots before maneuvering. Always wear high-visibility vests.",
+      timestamp: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      active: true
+    }
+  ];
+  const items = getLocalData<Briefing[]>(localKey, []);
+  if (items.length === 0) {
+    setLocalData(localKey, defaultBriefings);
+    return defaultBriefings;
+  }
+  return items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+}
+
+// --- BRIEFING RECEIPTS API ---
+export async function dbAddBriefingReceipt(uid: string, receipt: Omit<BriefingReceipt, "id" | "timestamp">): Promise<string> {
+  const id = "receipt-" + Date.now();
+  const req: BriefingReceipt = {
+    ...receipt,
+    id,
+    timestamp: new Date().toISOString()
+  };
+
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      await setDoc(doc(dbInstance, "users", uid, "briefing_receipts", id), sanitizeFirestoreData(req));
+      return id;
+    } catch (err) {
+      console.error("Error adding briefing receipt to Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_briefing_receipts_${uid}`;
+  const items = getLocalData<BriefingReceipt[]>(localKey, []);
+  items.push(req);
+  setLocalData(localKey, items);
+  return id;
+}
+
+export async function dbGetBriefingReceipts(uid: string): Promise<BriefingReceipt[]> {
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      const colRef = collection(dbInstance, "users", uid, "briefing_receipts");
+      const snapshot = await getDocs(colRef);
+      const items: BriefingReceipt[] = [];
+      snapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() } as BriefingReceipt);
+      });
+      return items;
+    } catch (err) {
+      console.error("Error reading briefing receipts from Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_briefing_receipts_${uid}`;
+  return getLocalData<BriefingReceipt[]>(localKey, []);
+}
+
+// --- VARIATIONS (DAYWORKS) API ---
+export async function dbAddVariation(uid: string, variation: Omit<Variation, "id" | "timestamp">): Promise<string> {
+  const id = "var-" + Date.now();
+  const req: Variation = {
+    ...variation,
+    id,
+    timestamp: new Date().toISOString()
+  };
+
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      await setDoc(doc(dbInstance, "users", uid, "variations", id), sanitizeFirestoreData(req));
+      return id;
+    } catch (err) {
+      console.error("Error adding variation to Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_variations_${uid}`;
+  const items = getLocalData<Variation[]>(localKey, []);
+  items.push(req);
+  setLocalData(localKey, items);
+  return id;
+}
+
+export async function dbGetVariations(uid: string): Promise<Variation[]> {
+  if (dbInstance && uid !== "admin-worker-hybrid-101" && authInstance?.currentUser) {
+    try {
+      const colRef = collection(dbInstance, "users", uid, "variations");
+      const snapshot = await getDocs(colRef);
+      const items: Variation[] = [];
+      snapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() } as Variation);
+      });
+      return items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    } catch (err) {
+      console.error("Error reading variations from Firestore:", err);
+    }
+  }
+
+  const localKey = `itsmysite_variations_${uid}`;
+  return getLocalData<Variation[]>(localKey, []);
 }
