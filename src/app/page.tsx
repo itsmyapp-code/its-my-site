@@ -70,6 +70,13 @@ export default function Home() {
   const [adminSubView, setAdminSubView] = useState<"overview" | "staff" | "map" | "logs">("staff");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"menu" | "help">("menu");
+  const [notifPermission, setNotifPermission] = useState<string>("default");
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotifPermission(Notification.permission);
+    }
+  }, []);
   
   // Dashboard Metrics & Lists
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -250,19 +257,20 @@ export default function Home() {
 
       const todayStr = now.toISOString().split("T")[0];
       const todaysShifts = workerShifts.filter((s) => s.date === todayStr);
-      if (todaysShifts.length === 0) return;
 
       const allSites = await dbGetSites(uid);
       let shouldPrompt = false;
       let matchedSiteName = "";
 
       // 1. Check Scheduled Checkpoints
-      for (const shift of todaysShifts) {
-        const site = allSites.find((s) => s.id === shift.siteId);
-        if (site && site.validationTimes && site.validationTimes.includes(timeStr)) {
-          shouldPrompt = true;
-          matchedSiteName = site.name;
-          break;
+      if (todaysShifts.length > 0) {
+        for (const shift of todaysShifts) {
+          const site = allSites.find((s) => s.id === shift.siteId);
+          if (site && site.validationTimes && site.validationTimes.includes(timeStr)) {
+            shouldPrompt = true;
+            matchedSiteName = site.name;
+            break;
+          }
         }
       }
 
@@ -303,8 +311,6 @@ export default function Home() {
               body: `Are you on-site at ${matchedSiteName}? Active shift verification is scheduled now.`,
               icon: "/favicon.ico",
             });
-          } else if (Notification.permission !== "denied") {
-            Notification.requestPermission();
           }
         }
         await dbAddAuditLog(uid, "VALIDATION_PROMPT_TRIGGERED", `Validation prompt triggered for worker at site ${matchedSiteName}`);
@@ -683,6 +689,38 @@ export default function Home() {
                 <span className="text-sm font-bold text-brand-yellow">{workerShifts.length} scheduled</span>
               </div>
             </div>
+
+            {/* Notification Permission Banner */}
+            {typeof window !== "undefined" && "Notification" in window && (
+              <div className="bg-slate-900 border border-slate-850 p-4 rounded-none text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 leading-normal">
+                <div>
+                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-0.5">Push Notifications Status:</span>
+                  <span className={`font-bold ${
+                    notifPermission === "granted" ? "text-emerald-500" :
+                    notifPermission === "denied" ? "text-rose-400" :
+                    "text-brand-yellow"
+                  }`}>
+                    {notifPermission === "granted" ? "🔔 Notifications Active & Authorized" :
+                     notifPermission === "denied" ? "🔕 Blocked (Check Browser Settings)" :
+                     "🔔 Notifications Disabled"}
+                  </span>
+                </div>
+                {notifPermission === "default" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      Notification.requestPermission().then((perm) => {
+                        setNotifPermission(perm);
+                        dbAddAuditLog(uid, "NOTIFICATION_PERMISSION_REQUESTED", `Worker requested notification permissions: ${perm}`);
+                      });
+                    }}
+                    className="h-8 px-3.5 bg-brand-yellow hover:bg-yellow-500 text-slate-955 font-extrabold uppercase tracking-wider transition rounded-none text-[10px] cursor-pointer whitespace-nowrap shrink-0 border-none"
+                  >
+                    Enable Alerts
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* WORKER'S SPECIFIC ASSIGNED SHIFTS LIST */}
             <div className="bg-slate-900 border border-slate-800 p-4 space-y-3">

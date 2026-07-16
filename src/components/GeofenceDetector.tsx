@@ -393,13 +393,22 @@ export function GeofenceDetector({ uid, onValidationSuccess, activePrompt, setAc
                   : "bg-slate-900 hover:bg-slate-850 text-slate-400 border-slate-800"
               }`}
             >
-              <div className="truncate">{loc.name}</div>
-              {loc.lat !== 0 && <div className="text-[10px] text-slate-650 mt-0.5">({loc.lat}, {loc.lng})</div>}
+              <div className="truncate flex items-center justify-between">
+                <span>{loc.name}</span>
+                {loc.name === "Actual GPS" && (
+                  <span className="text-[8px] bg-emerald-950 text-emerald-450 border border-emerald-800 px-1 py-0.5 font-extrabold uppercase animate-pulse">LIVE PHONE DATA</span>
+                )}
+              </div>
+              {loc.lat !== 0 ? (
+                <div className="text-[10px] text-slate-650 mt-0.5">({loc.lat}, {loc.lng})</div>
+              ) : (
+                <div className="text-[10px] text-slate-650 mt-0.5">Using your device's physical coordinates</div>
+              )}
             </button>
           ))}
         </div>
         <div className="text-xs text-slate-500 leading-normal">
-          * Use simulated locations to test geofencing inside the Dartmouth geofences while testing in any UK location.
+          * <strong className="text-slate-400">Actual GPS</strong> reads your device's live satellite location. The other options are simulators so you can test geofences while sitting at home/office.
         </div>
       </div>
 
