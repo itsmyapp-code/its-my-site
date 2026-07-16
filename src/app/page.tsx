@@ -1652,7 +1652,7 @@ export default function Home() {
                             At the scheduled shift end time, a checkout prompt modal will open.
                           </li>
                           <li>
-                            Select <strong className="text-slate-200">"Logging Overtime Work"</strong> to keep the shift open.
+                            Select <strong className="text-slate-200">"Logging Overtime Work"</strong> and provide the required justification notes (explaining why you stayed late) to keep the shift open.
                           </li>
                           <li>
                             When you finish, clock out manually. The system calculates the overtime minutes between the scheduled shift end and your checkout timestamp automatically.
@@ -1668,14 +1668,14 @@ export default function Home() {
                       🛡️ Admin Dashboard Operations Guide
                     </h4>
                     
-                    <div className="space-y-4 text-xs text-slate-350 leading-relaxed font-sans">
+                    <div className="space-y-4 text-xs text-slate-355 leading-relaxed font-sans">
                       {/* Rota Scheduling */}
                       <div className="space-y-1.5">
                         <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">1. STAFF REGISTRY & ROTA SCHEDULING</span>
                         <p>Navigate to the <strong className="text-slate-200">Staff Directory & Rota</strong> tab:</p>
                         <ul className="list-disc pl-5 space-y-1 text-slate-400">
                           <li>
-                            <strong className="text-slate-200">Register Staff:</strong> Input full name, phone number, email address, and hourly rate.
+                            <strong className="text-slate-200">Register Staff:</strong> Input full name, phone number, email address, and hourly rate. Individual cards show safety briefing completion and variation log counts.
                           </li>
                           <li>
                             <strong className="text-slate-200">Create Shift:</strong> Select the worker profile, target site, start date, duration, and shift start time to schedule rotas.
@@ -1743,7 +1743,7 @@ export default function Home() {
                             Displays shifts where a worker stayed late and initiated an overtime claim.
                           </li>
                           <li>
-                            Admins can review shift details, accrued overtime minutes, and associated cost increases.
+                            Admins can review shift details, accrued overtime minutes, worker-entered justification reasons, and associated cost increases.
                           </li>
                           <li>
                             Select <strong className="text-slate-200">"Approve Overtime"</strong> to merge overtime minutes into the shift's payable duration, or select <strong className="text-slate-200">"Decline"</strong>.
@@ -1770,11 +1770,11 @@ export default function Home() {
 
                       {/* Toolbox Talks safety briefings */}
                       <div className="space-y-1.5 border-t border-slate-850 pt-3">
-                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">8. H&S TOOLBOX TALKS PORTAL</span>
+                        <span className="text-[10px] text-brand-blue font-extrabold uppercase tracking-wider block">8. H&S BRIEFINGS & TALKS PORTAL</span>
                         <p>Navigate to the <strong className="text-slate-200">Payroll Reports &rarr; H&S Toolbox Talks</strong> tab:</p>
                         <ul className="list-disc pl-5 space-y-1 text-slate-400">
                           <li>
-                            Select a CITB safety talk topic (e.g., Working at Height) and type the briefing text.
+                            Type in any custom briefing subject/topic and provide content text.
                           </li>
                           <li>
                             Click <strong className="text-slate-100">"Publish Toolbox Talk"</strong> to immediately push this mandatory briefing onto all active workers' devices.
