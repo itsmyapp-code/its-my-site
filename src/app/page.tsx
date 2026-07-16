@@ -108,6 +108,7 @@ export default function Home() {
   const [workerShifts, setWorkerShifts] = useState<Shift[]>([]);
 
   const [allAdminShifts, setAllAdminShifts] = useState<Shift[]>([]);
+  const [overtimeNotesText, setOvertimeNotesText] = useState("");
   const [allAdminStaff, setAllAdminStaff] = useState<Staff[]>([]);
 
   const unreadBriefing = role === "worker" && selectedStaffId
@@ -599,16 +600,22 @@ export default function Home() {
   }, [role, selectedStaffId, workerShifts]);
 
   const handleClaimOvertime = async (shift: Shift) => {
+    if (!overtimeNotesText.trim()) {
+      alert("Please enter a reason/description for the overtime work.");
+      return;
+    }
     try {
       await dbUpdateShift(uid, shift.id, {
-        overtimeRequested: true
+        overtimeRequested: true,
+        overtimeNotes: overtimeNotesText
       });
       await dbAddAuditLog(
         uid,
         "OVERTIME_CLAIM_INITIATED",
-        `Worker ${shift.staffName} requested overtime logging for shift ending at ${shift.startTime} (Hours: ${shift.hours})`
+        `Worker ${shift.staffName} requested overtime logging for shift ending at ${shift.startTime} (Hours: ${shift.hours}). Reason: "${overtimeNotesText}"`
       );
       setOvertimePromptShift(null);
+      setOvertimeNotesText("");
       fetchDashboardData();
     } catch (err) {
       console.error(err);
@@ -656,7 +663,7 @@ export default function Home() {
   };
 
   // --- ADMIN BRIEFINGS ACTIONS ---
-  const [newBriefingTopic, setNewBriefingTopic] = useState("Working at Height");
+  const [newBriefingTopic, setNewBriefingTopic] = useState("");
   const [newBriefingContent, setNewBriefingContent] = useState("");
   const [briefingSubmitting, setBriefingSubmitting] = useState(false);
   const [expandedBriefingId, setExpandedBriefingId] = useState<string | null>(null);
@@ -666,6 +673,10 @@ export default function Home() {
 
   const handleAddBriefingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newBriefingTopic.trim()) {
+      alert("Please enter talk topic / subject.");
+      return;
+    }
     if (!newBriefingContent.trim()) {
       alert("Please enter talk content.");
       return;
@@ -683,6 +694,7 @@ export default function Home() {
         `Admin published mandatory H&S Briefing (Toolbox Talk) on topic: "${newBriefingTopic}"`
       );
       alert("Briefing talk published successfully!");
+      setNewBriefingTopic("");
       setNewBriefingContent("");
       fetchDashboardData();
     } catch (err: any) {
@@ -1262,6 +1274,12 @@ export default function Home() {
                                       <span className="text-emerald-500 font-extrabold">£{cost.toFixed(2)}</span>
                                     </div>
                                   </div>
+                                  {s.overtimeNotes && (
+                                    <div className="p-2 bg-slate-950 border border-slate-850 rounded-none text-slate-300 font-sans text-xs">
+                                      <span className="text-[9px] text-slate-500 font-bold uppercase block mb-0.5">Worker Justification:</span>
+                                      <p className="leading-normal font-medium">{s.overtimeNotes}</p>
+                                    </div>
+                                  )}
 
                                   <div className="flex gap-2 pt-2 border-t border-slate-850">
                                     <button
@@ -1359,16 +1377,14 @@ export default function Home() {
                         <form onSubmit={handleAddBriefingSubmit} className="space-y-3.5 font-mono text-xs">
                           <div>
                             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Briefing Topic</label>
-                            <select
+                            <input
+                              type="text"
+                              placeholder="e.g. Working at Height, Site Security, Covid-19 Protocol..."
                               value={newBriefingTopic}
                               onChange={(e) => setNewBriefingTopic(e.target.value)}
-                              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-xs font-bold"
-                            >
-                              <option value="Working at Height">Working at Height</option>
-                              <option value="Plant Machinery">Plant Machinery</option>
-                              <option value="Manual Handling">Manual Handling</option>
-                              <option value="General Site Safety">General Site Safety</option>
-                            </select>
+                              className="w-full h-10 px-3 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue rounded-none text-xs font-bold font-mono"
+                              required
+                            />
                           </div>
 
                           <div>
@@ -1901,21 +1917,11 @@ export default function Home() {
                           {shift.clockInTime && (
                             <div>
                               📥 <span className="text-slate-500">In:</span> <span className="text-emerald-400 font-bold">{shift.clockInTime}</span>
-                              {shift.clockInCoordinates && (
-                                <span className="text-[10px] text-slate-650 block">
-                                  Coords: ({shift.clockInCoordinates.lat.toFixed(5)}, {shift.clockInCoordinates.lng.toFixed(5)})
-                                </span>
-                              )}
                             </div>
                           )}
                           {shift.clockOutTime && (
                             <div>
                               📤 <span className="text-slate-500">Out:</span> <span className="text-brand-yellow font-bold">{shift.clockOutTime}</span>
-                              {shift.clockOutCoordinates && (
-                                <span className="text-[10px] text-slate-650 block">
-                                  Coords: ({shift.clockOutCoordinates.lat.toFixed(5)}, {shift.clockOutCoordinates.lng.toFixed(5)})
-                                </span>
-                              )}
                             </div>
                           )}
                           {!shift.clockInTime && !shift.clockOutTime && (
@@ -1927,7 +1933,7 @@ export default function Home() {
                           {loadingClockId === shift.id ? (
                             <div className="flex items-center gap-1.5 text-slate-450 font-bold">
                               <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-blue" />
-                              <span>RETRIEVING GPS...</span>
+                              <span>Verifying...</span>
                             </div>
                           ) : (
                             <>
@@ -2327,11 +2333,23 @@ export default function Home() {
                 Please indicate your checkout status:
               </p>
               
+              <div className="space-y-2">
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Reason for Overtime (required to claim)</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. concrete pouring delays, extra wiring tasks..."
+                  value={overtimeNotesText}
+                  onChange={(e) => setOvertimeNotesText(e.target.value)}
+                  className="w-full p-2 bg-slate-950 border border-slate-800 text-slate-200 outline-none focus:border-brand-blue text-xs rounded-none font-sans font-medium"
+                />
+              </div>
+              
               <div className="flex flex-col gap-2.5">
                 <button
                   type="button"
                   onClick={() => {
                     setOvertimePromptShift(null);
+                    setOvertimeNotesText("");
                     handleClockOut(overtimePromptShift);
                   }}
                   className="w-full h-10 bg-slate-955 hover:bg-slate-850 text-slate-200 font-bold uppercase tracking-wider transition rounded-none text-xs border border-slate-800 cursor-pointer"

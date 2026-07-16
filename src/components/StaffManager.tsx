@@ -14,7 +14,11 @@ import {
   Shift, 
   dbAddAuditLog,
   dbUpdateStaff,
-  dbUpdateShift
+  dbUpdateShift,
+  dbGetBriefingReceipts,
+  dbGetVariations,
+  BriefingReceipt,
+  Variation
 } from "@/lib/db";
 import { 
   Users, 
@@ -40,6 +44,8 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
+  const [briefingReceipts, setBriefingReceipts] = useState<BriefingReceipt[]>([]);
+  const [variations, setVariations] = useState<Variation[]>([]);
   const [loading, setLoading] = useState(true);
   const [formMsg, setFormMsg] = useState("");
 
@@ -71,6 +77,11 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
       setStaffList(staffData);
       setShifts(shiftData);
       setSites(siteData);
+
+      const receiptsData = await dbGetBriefingReceipts(uid).catch(() => []);
+      setBriefingReceipts(receiptsData);
+      const variationsData = await dbGetVariations(uid).catch(() => []);
+      setVariations(variationsData);
 
       // Pre-select first values in dropdowns if available
       if (staffData.length > 0 && !selectedStaffId) {
@@ -440,6 +451,14 @@ export function StaffManager({ uid, refreshTrigger, onDataModified }: StaffManag
                     <span className="text-slate-500 font-medium block text-xs">
                       Phone: {staff.phone} {staff.email ? `| Email: ${staff.email}` : ""} | Rate: £{staff.hourlyRate.toFixed(2)}/hr
                     </span>
+                    <div className="flex flex-wrap gap-2 pt-1 font-sans text-[10px] text-slate-400">
+                      <span className="bg-slate-950 px-1.5 py-0.5 border border-slate-850">
+                        📄 Safety Briefings: <strong className="text-brand-yellow">{briefingReceipts.filter(r => r.staffId === staff.id).length}</strong>
+                      </span>
+                      <span className="bg-slate-950 px-1.5 py-0.5 border border-slate-850">
+                        📋 Variations: <strong className="text-brand-blue">{variations.filter(v => v.staffId === staff.id).length}</strong>
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
